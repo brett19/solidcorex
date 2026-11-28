@@ -95,32 +95,54 @@ pub fn extrude(
     } else {
         (end, start)
     };
-    let place = Place {
-        origin: frame.origin(),
-        x: *frame.x(),
-        y: *frame.y(),
-        z: *frame.z(),
-    };
+    let place = Place::of(frame);
     let mut asm = Assembly::new(doc)?;
+    let faces = extrude_into(&mut asm, region, &place, [lo, hi], start < end)?;
+    Ok(Made {
+        body: asm.finish()?,
+        faces,
+    })
+}
+
+/// The loops of `region` as the writer takes them, each with whether the region turned it
+/// and its id, in the order outer, holes.
+pub(crate) fn loops_of(region: &Region) -> impl Iterator<Item = (&scx_planar::Loop, bool, LoopId)> {
     let loops = core::iter::once(region.outer()).chain(region.holes());
     let reversed =
         core::iter::once(region.outer_reversed()).chain(region.holes_reversed().iter().copied());
+    let ids = core::iter::once(LoopId::Outer).chain((0..region.holes().len()).map(LoopId::Hole));
+    loops.zip(reversed).zip(ids).map(|((l, t), id)| (l, t, id))
+}
+
+/// Segment `i` of a loop of `n` as `Region::new` was given it, `turned` when the region ran
+/// the loop the other way.
+pub(crate) const fn given(in_loop: LoopId, turned: bool, n: usize, i: usize) -> SegmentRef {
+    SegmentRef {
+        in_loop,
+        segment: if turned { n - 1 - i } else { i },
+    }
+}
+
+/// Writes the solid of `region` between heights `[lo, hi]` into the solid `asm` is on: the
+/// walls, then the two caps. `ascending` is whether the span started at `lo`.
+pub(crate) fn extrude_into(
+    asm: &mut Assembly<'_>,
+    region: &Region,
+    place: &Place,
+    [lo, hi]: [f64; 2],
+    ascending: bool,
+) -> Result<ExtrudeFaces, MakeError> {
     let mut rings = Vec::with_capacity(1 + region.holes().len());
     let mut walls = Vec::with_capacity(1 + region.holes().len());
-    let ids = core::iter::once(LoopId::Outer).chain((0..region.holes().len()).map(LoopId::Hole));
-    for ((l, turned), in_loop) in loops.zip(reversed).zip(ids) {
+    for (l, turned, in_loop) in loops_of(region) {
         let n = l.segments().len();
-        // The segment's index as given: a turned loop runs the other way.
-        let at = |i: usize| SegmentRef {
-            in_loop,
-            segment: if turned { n - 1 - i } else { i },
-        };
-        let ring = ring(&mut asm, &place, l.segments(), [lo, hi], &at)?;
-        let mut given = ring.walls.clone();
+        let at = |i: usize| given(in_loop, turned, n, i);
+        let ring = ring(asm, place, l.segments(), [lo, hi], &at)?;
+        let mut as_given = ring.walls.clone();
         if turned {
-            given.reverse();
+            as_given.reverse();
         }
-        walls.push(given);
+        walls.push(as_given);
         rings.push(ring);
     }
     let top_frame = Frame::new(place.at(Point2::new(0.0, 0.0), hi), place.z, place.x)
@@ -140,19 +162,16 @@ pub fn extrude(
         })
         .collect();
     let bottom = asm.face(Surface::Plane(Plane::new(bottom_frame)), &bottom_loops)?;
-    let (start, end) = if start < end {
+    let (start, end) = if ascending {
         (bottom, top)
     } else {
         (top, bottom)
     };
-    Ok(Made {
-        body: asm.finish()?,
-        faces: ExtrudeFaces { start, end, walls },
-    })
+    Ok(ExtrudeFaces { start, end, walls })
 }
 
 /// Where a point of the region lands in space.
-struct Place {
+pub(crate) struct Place {
     origin: Point3,
     x: Vec3,
     y: Vec3,
@@ -160,8 +179,18 @@ struct Place {
 }
 
 impl Place {
+    /// The placement of `frame`'s axes.
+    pub(crate) fn of(frame: &Frame) -> Self {
+        Self {
+            origin: frame.origin(),
+            x: *frame.x(),
+            y: *frame.y(),
+            z: *frame.z(),
+        }
+    }
+
     /// `(p, z)` in the frame, placed once as the sum of its offsets added to the origin.
-    fn at(&self, p: Point2, z: f64) -> Point3 {
+    pub(crate) fn at(&self, p: Point2, z: f64) -> Point3 {
         self.origin + (self.x * p.x + self.y * p.y + self.z * z)
     }
 
@@ -265,7 +294,7 @@ fn arc_geom(centre: Point2, start: Point2, end: Point2, sense: Sense) -> ArcGeom
 
 /// The rim edge of `s` at height `z` between `ends` (its start's vertex and its end's), as
 /// the use that runs along the segment.
-fn rim(
+pub(crate) fn rim(
     asm: &mut Assembly<'_>,
     place: &Place,
     s: &Segment,

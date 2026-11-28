@@ -35,8 +35,8 @@ use scx_num::vector2d::Point2;
 use scx_num::vector3d::{Point3, Vec3};
 use scx_nurbs::Approach;
 use scx_surface::{
-    Cone, Contact, CurveSurfaceHit, Cylinder, Plane, Sphere, Surface, SurfaceError, Torus,
-    intersect_curve,
+    Cone, Contact, CurveSurfaceHit, Cylinder, OnSurface, Plane, Sphere, Surface, SurfaceError,
+    Torus, curve_on_surface, intersect_curve,
 };
 use scx_testkit::analytic;
 use scx_testkit::curve_surface::{self as t2, CurveKind, Meeting, SurfaceKind};
@@ -736,6 +736,117 @@ fn curves_on_the_surface_overlap_it() {
         }
     }
     assert_eq!(count, 300);
+}
+
+/// [`curve_on_surface`] and the work it charged.
+fn stated(p: &Path, s: &Surf, se: &Extent2d, tol: f64) -> (OnSurface, u64) {
+    let mut budget = Budget::unlimited();
+    let on = curve_on_surface(&p.c, &p.ce, &s.s, se, zone(tol), &mut budget, &Stop::new());
+    (on.unwrap(), budget.used())
+}
+
+/// The answer [`curve_on_surface`] stands for, as [`intersect_curve`] gives it.
+fn read(on: OnSurface) -> Vec<CurveSurfaceHit> {
+    match on {
+        OnSurface::Proved(t) | OnSurface::Isolated(t) => t
+            .into_iter()
+            .map(|t| CurveSurfaceHit::Overlap { t })
+            .collect(),
+        OnSurface::Leaves(hits) => hits,
+    }
+}
+
+/// BO21: a curve stated to lie on a surface is answered as `intersect_curve` answers it, to
+/// the bit, on curves lying on each kind and on random pairs that do not; on a plane the
+/// closed-form bound proves it for one unit against the roots' two a piece.
+#[test]
+fn a_stated_curve_is_answered_as_intersect_curve_answers_it() {
+    let mut rng = Rng::new(0x5_06_21);
+    let mut proved = 0;
+    for _ in 0..20 {
+        for (surf, p) in on_surface_cases(&mut rng) {
+            let se = full(&surf.s);
+            for tol in [1e-6, 1e-3] {
+                let (on, work) = stated(&p, &surf, &se, tol);
+                let mut plain = Budget::unlimited();
+                let want = intersect_curve(
+                    &p.c,
+                    &p.ce,
+                    &surf.s,
+                    &se,
+                    zone(tol),
+                    &mut plain,
+                    &Stop::new(),
+                );
+                if matches!(surf.s, Surface::Plane(_)) {
+                    assert!(matches!(on, OnSurface::Proved(_)), "{:?}: {on:?}", p.c);
+                    assert!(
+                        work == 1 && work < plain.used(),
+                        "{work} against {}",
+                        plain.used()
+                    );
+                    proved += 1;
+                } else {
+                    assert!(matches!(on, OnSurface::Isolated(_)), "{:?}: {on:?}", p.c);
+                    assert_eq!(work, plain.used());
+                }
+                assert_eq!(read(on), want.unwrap());
+            }
+        }
+    }
+    assert_eq!(proved, 160);
+    for seed in 0..10 {
+        let mut rng = Rng::new(0x5_06_00 + seed);
+        for s in surfaces(&mut rng) {
+            let se = full(&s.s);
+            let o = Point3::new(s.kit_origin()[0], s.kit_origin()[1], s.kit_origin()[2]);
+            for p in curves(&mut rng, o) {
+                for tol in [1e-6, 1e-3] {
+                    let (on, _) = stated(&p, &s, &se, tol);
+                    assert_eq!(read(on), run(&p, &s, &se, tol).unwrap());
+                }
+            }
+        }
+    }
+}
+
+/// A line just off a plane: within the tolerance the bound proves it on; past it the
+/// curve leaves, as `intersect_curve` finds, and nothing is proved.
+#[test]
+fn a_stated_line_off_a_plane_is_proved_only_within_the_tolerance() {
+    let f = Frame::new(
+        Point3::new(1.0, 2.0, 3.0),
+        Vec3::new(0.0, 0.0, 1.0),
+        Vec3::new(1.0, 0.0, 0.0),
+    )
+    .unwrap();
+    let surf = plane(f);
+    let se = full(&surf.s);
+    let tol = 1e-6;
+    for (lift, proved) in [
+        (0.0, true),
+        (0.5, true),
+        (0.99, true),
+        (1.5, false),
+        (3.0, false),
+    ] {
+        // tilted: one end on the plane, the other `lift` tolerances above it
+        let p = line(
+            Point3::new(1.0, 2.0, 3.0 + 0.5 * lift * tol),
+            Vec3::new(1.0, 0.0, lift * tol / 20.0),
+            10.0,
+        );
+        let (on, _) = stated(&p, &surf, &se, tol);
+        assert_eq!(
+            matches!(on, OnSurface::Proved(_)),
+            proved,
+            "lift {lift}: {on:?}"
+        );
+        if lift > 1.0 {
+            assert!(matches!(on, OnSurface::Leaves(_)), "lift {lift}: {on:?}");
+        }
+        assert_eq!(read(on), run(&p, &surf, &se, tol).unwrap(), "lift {lift}");
+    }
 }
 
 /// Whether the overlap pieces cover `t` (on a closed curve, `t` or `t` a turn on).
