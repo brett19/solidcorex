@@ -103,8 +103,8 @@ pub use mid_sheet::{Holds, Wall, from_frame, in_frame, onto_plane, polygon_area,
 pub use rays::RAYS;
 pub use reach::Near;
 pub use reads::{
-    EdgePoint, FaceUv, LineHit, Nearest, ParallelTurnError, closest_to_point, edge_at,
-    edge_distance, face_contains, face_line_hits, face_line_nearest, face_uv, faces_against,
+    EdgeClosest, EdgePoint, FaceUv, LineHit, Nearest, ParallelTurnError, closest_to_point, edge_at,
+    edge_closest_point, edge_distance, face_contains, face_line_hits, face_line_nearest, face_uv, faces_against,
     faces_at, outward_normal, rim_edges, turn_to_parallel,
 };
 pub use recognize::{

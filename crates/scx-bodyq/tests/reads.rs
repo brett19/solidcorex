@@ -14,7 +14,8 @@ use core::f64::consts::{FRAC_PI_2, FRAC_PI_4};
 
 use along_common::doc;
 use scx_bodyq::{
-    BodyqError, BodyqRefusal, Near, ParallelTurnError, closest_to_point, edge_at, edge_distance,
+    BodyqError, BodyqRefusal, Near, ParallelTurnError, closest_to_point, edge_at,
+    edge_closest_point, edge_distance,
     face_contains, face_line_hits, face_line_nearest, face_uv, faces_against, faces_at,
     outward_normal, rim_edges, turn_to_parallel,
 };
@@ -99,6 +100,13 @@ fn an_edges_distance_is_to_its_interior_or_its_nearer_end() {
     // Past the end: the distance to the end, 3.
     let d = edge_distance(&body, e, pt(13.0, 0.0, 0.0), &mut b()).unwrap();
     assert!(near(d.mm(), 3.0), "{d:?}");
+    // The point and its parameter (the line's, from its start vertex).
+    let c = edge_closest_point(&body, e, pt(4.0, -3.0, 4.0), &mut b()).unwrap();
+    assert!((c.point - pt(4.0, 0.0, 0.0)).length() < 1e-12 && near(c.distance.mm(), 5.0));
+    let c = edge_closest_point(&body, e, pt(13.0, 0.0, 0.0), &mut b()).unwrap();
+    assert!((c.point - pt(10.0, 0.0, 0.0)).length() < 1e-15, "{c:?}");
+    let on = edge_at(&body, e, c.parameter).unwrap();
+    assert!((on.point - c.point).length() < 1e-12, "{c:?} {on:?}");
     assert!(edge_distance(&body, EdgeId::from_raw(999), pt(0.0, 0.0, 0.0), &mut b()).is_err());
 }
 

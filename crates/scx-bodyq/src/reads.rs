@@ -83,8 +83,65 @@ pub fn edge_at(body: &Brep, edge: EdgeId, t: f64) -> Result<EdgePoint, BodyqErro
     })
 }
 
-/// The point of edge `edge` nearest `p` (its curve over its interval, ends included), and
-/// that distance.
+/// The point of an edge's curve nearest a point.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct EdgeClosest {
+    /// The nearest point.
+    pub point: Point3,
+    /// Its parameter on the curve (an end vertex's is the interval's end it is at).
+    pub parameter: f64,
+    /// Its distance from the point.
+    pub distance: Length,
+}
+
+fn closest_on(
+    body: &Brep,
+    edge: EdgeId,
+    p: Point3,
+    budget: &mut Budget,
+) -> Result<EdgeClosest, BodyqError> {
+    let e = body.edge(edge).ok_or_else(|| no_edge(edge))?;
+    let EdgeShape::Curve { interval, .. } = e.shape() else {
+        return Err(BodyqError::Refused(BodyqRefusal::Collapsed { edge }));
+    };
+    let mut best: Option<EdgeClosest> = None;
+    let mut keep = |point: Point3, parameter: f64, d: f64| {
+        if best.is_none_or(|b| d < b.distance.mm()) {
+            best = Some(EdgeClosest {
+                point,
+                parameter,
+                distance: Length::from_mm(d),
+            });
+        }
+    };
+    // The start vertex is at the interval's start, the end vertex at its end.
+    keep(e.start().point(), interval.min(), e.start().point().distance(p));
+    keep(e.end().point(), interval.max(), e.end().point().distance(p));
+    if let Some((t, q, d)) = edge_foot(e, p, budget)? {
+        keep(q, t, d);
+    }
+    best.ok_or(BodyqError::Defect(BodyqDefect::NoEdgeBox { edge }))
+}
+
+/// The point of edge `edge`'s curve over its interval nearest `p` (the foot in closed form on
+/// every analytic curve, else an end), with its parameter. One unit of work for the foot.
+///
+/// # Errors
+///
+/// Refused for an edge the body does not have, a collapsed edge or a `p` that is not finite;
+/// Unsupported for a NURBS curve the inversion does not take; Exhausted.
+pub fn edge_closest_point(
+    body: &Brep,
+    edge: EdgeId,
+    p: Point3,
+    budget: &mut Budget,
+) -> Result<EdgeClosest, BodyqError> {
+    finite_point(p)?;
+    closest_on(body, edge, p, budget)
+}
+
+/// The nearest point of edge `edge` to `p` for the members of a set: a collapsed edge is its
+/// vertex.
 fn edge_nearest(
     body: &Brep,
     edge: EdgeId,
@@ -92,19 +149,12 @@ fn edge_nearest(
     budget: &mut Budget,
 ) -> Result<(Point3, f64), BodyqError> {
     let e = body.edge(edge).ok_or_else(|| no_edge(edge))?;
-    let mut best: Option<(Point3, f64)> = None;
-    let mut keep = |q: Point3, d: f64| {
-        if best.is_none_or(|(_, b)| d < b) {
-            best = Some((q, d));
-        }
-    };
-    for v in [e.start(), e.end()] {
-        keep(v.point(), v.point().distance(p));
+    if matches!(e.shape(), EdgeShape::Collapsed) {
+        let q = e.start().point();
+        return Ok((q, q.distance(p)));
     }
-    if let Some((_, q, d)) = edge_foot(e, p, budget)? {
-        keep(q, d);
-    }
-    best.ok_or(BodyqError::Defect(BodyqDefect::NoEdgeBox { edge }))
+    let c = closest_on(body, edge, p, budget)?;
+    Ok((c.point, c.distance.mm()))
 }
 
 /// How far `p` is from edge `edge`: the least distance to its curve over its interval, the
