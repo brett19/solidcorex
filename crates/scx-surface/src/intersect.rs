@@ -901,7 +901,7 @@ impl Target {
                     small: c.minor().mm(),
                 },
             ),
-            Surface::Nurbs(_) => return None,
+            Surface::Nurbs(_) | Surface::Procedural(_) => return None,
         };
         Some(Self { axes, shape })
     }
