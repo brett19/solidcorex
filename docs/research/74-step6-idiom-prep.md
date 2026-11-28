@@ -6297,3 +6297,91 @@ operations' work is unchanged (the new `WarningKind` variant adds no code to the
 ### 50.5 Proposed 04 row
 
 | 11-28 | (For the owner's review) ST6: `scx_stitch::rebase(&Brep, Resolution, &mut Cx) -> Result<Rebased, StitchError>` and `WarningKind::AccuracyPastResolution`. Two vertices within the new coincidence are `Refused(VerticesWithinCoincidence)`; entities whose accuracy is past the new resolution are warned and, where unrecorded, recorded as the old resolution with `Basis::Stated`; ids, topology and geometry are kept (empty changes), and the result is stamped `to`. Coarser identifies nothing in one body (74 §50.2). Against: `Stated` stands in for a missing inherited basis. For: no silent claim of a tighter body. | ST6 |
+
+## 51. BW5 as built (11-28)
+
+`scx_bodyq::pick(&Brep, origin, direction, EntityKind, aperture, &mut Budget, &Stop) ->
+Result<Vec<RayPicked>, BodyqError>` in `crates/scx-bodyq/src/pick.rs`; `RayPicked { entity, depth,
+distance, at }`. It is `pick_at` for a ray (74 §44): the same aperture (plus the entity's
+coincidence), `EntityKind` of face, edge or vertex (`NotPickable` otherwise), a batch-free answer
+where an empty one is a ray that picks nothing, and the order is by (depth, id) where `pick_at`'s
+is by (distance, id). `rays::cast` was not the building block after all: it answers a region
+(one clean ray), `pick` needs every place, so it reads `intersect_curve` directly.
+
+### 51.1 What is a hit
+
+The ray is the half-line from the origin as far as the body's box reaches (plus the aperture).
+
+- **Face.** One hit at each crossing or touch of the face as trimmed (distance 0, `at` the
+  crossing), by `intersect_curve` of the ray with the surface over the face's uv box and
+  `contains_uv` not `Outside`; an overlap (the ray lies in the face) is a hit at its start. A face
+  with no crossing that the ray passes within the aperture of has one hit at each dip toward its
+  surface (sphere, cylinder, cone, torus: the ray meets the surface offset by the aperture, which
+  is a surface of the same kind; between the meetings the foot's distance is minimised by a fixed
+  60-step golden section and the foot must be in the face), else one hit at the nearest approach
+  of its boundary edges (what a plane has: a ray that does not cross a trimmed plane comes nearest
+  on its boundary).
+- **Edge.** One hit for each stretch of its curve within the aperture of the ray: the curve meets
+  the thin cylinder about the ray (`intersect_curve`), and a bracket about each meeting is
+  minimised for the distance to the ray. The solver reports a transversal crossing of a tube
+  thinner than its tolerance as one tangent point, not an entry and an exit, so no pairing is
+  assumed: each meeting has the bracket from the middle before it to the middle after, and a
+  least at a shared middle counts only if the distance rises on both sides (two brackets finding
+  one dip are merged within 1e-6).
+- **Vertex.** One hit at its nearest approach (closed form).
+
+### 51.2 Decisions
+
+- **One hit per crossing, one per uncrossed face.** For: a cylinder wall crossed twice is two
+  places at two depths, which is what a caller who steps through the body wants (the pin's
+  `face_hits_by_ray` listed faces, losing the second). Against: an uncrossed near face gives one
+  hit, a crossed one gives hits only at crossings, so a face crossed and also grazed elsewhere
+  shows only the crossings. The nearest approach of a crossed face is distance 0 anyway.
+- **Depth is along the ray from its origin, not along the face's normal.** Ties are exact ties in
+  `f64` then by `Entity`; a ray up the shared edge of two faces (a cube's, tested) gives both at
+  the same depth, the lower id first. Against: two depths 1e-16 apart order by depth, not id; a
+  tolerance sort is not a total order, so the caller who wants a looser tie groups by coincidence.
+- **The aperture is for edges and surfaces, not a looser crossing.** A crossing outside the trim
+  by less than the aperture is found by the face's boundary edge within the aperture, not by
+  widening the uv box.
+- **NURBS.** The surface intersection already answers a crossing (a flat patch is a test), so a
+  NURBS face the ray crosses has its hit. What step 5 owns is the dip: a NURBS or procedural
+  face the ray reaches the box of, with no crossing, has no offset surface to meet, so
+  `Unsupported(Nurbs { at: Face })` names it (the same for a NURBS edge by the tube
+  intersection). Against: a ray whose box meets a NURBS face but is far from it is refused
+  rather than answered empty; the face's box is the only cheap test, and a certified distance
+  from a ray to a NURBS surface is what step 5 builds.
+- **Not covered.** A ray running parallel to a face at a standoff within the aperture with no
+  crossing is picked at the boundary where it leaves the face, not where it first comes over it;
+  a cone with an offset past its apex is not tried (`Cone::new` refuses it).
+- **No new error variant.** `Unsupported::Nurbs` names the face or edge, which is the missing
+  piece's place; the module doc names step 5.
+
+### 51.3 Tests (`tests/pick.rs`, 11)
+
+Closed forms: a z ray through the block gives bottom and top at 3 and 4.5, a slanted ray leaves
+at the least coordinate time; a ray along x through the cylinder at y 0.3 gives 5 -/+ sqrt(1.35)
+on the one wall, along the axis the two caps and, at aperture 1.25, the wall as a third; a sphere
+at 5 -/+ sqrt(1.4) and along a slanted diagonal at 3.7 and 6.3; a torus at 2.4, 3.6, 6.4, 7.6
+(four) and at z = 0.3 the chords sqrt(0.27) about 3 and 7, none through the hole; a ray passing
+cylinder (0.05), sphere (0.05), torus (0.05, two places 3 and 7) and cone (0.05 / sqrt(1.2025))
+misses is empty just under the distance and one hit (two for the torus) just over, depth and
+foot checked; a ray 0.03 beside a block face picks that face, bottom and top at 0.03; ties by id
+along a face's own edge; edges at 3 and 4.5, vertices at the same depths, and a wide aperture
+reaching the neighbouring corners; a circular rim crossed at 3.8 and 6.2; a NURBS patch crossed
+(a hit) and passed beside (typed refusal naming it); the refusals, determinism of hits and
+work, and a one-unit budget exhausting.
+
+### 51.4 Work (before / after)
+
+No existing path is changed, so there is no before: the pin's three functions were a face box
+walk plus a sample march. Per ray (units of the budget; wall time in a debug build): block
+face ray 4 units (0.6 ms); cylinder 2 (0.3 ms); sphere 2 (1.0 ms); torus four hits 2 (3.7 ms);
+torus grazing at aperture 0.06 272 (23 ms, 61 golden steps for each of two brackets, a foot a
+step); cylinder grazing 138 (0.5 ms); edge picks 6 to 14 units. The golden section is a fixed 60
+steps, so a grazing face costs about 70 units a dip; a closed-form foot of the dip per kind would
+be one, left open.
+
+### 51.5 Proposed 04 row
+
+| 11-28 | (For the owner's review) BW5: `scx_bodyq::pick(&Brep, origin, direction, EntityKind, aperture, budget, stop) -> Vec<RayPicked>` returns every face, edge or vertex within the aperture of a ray, with its depth, sorted by (depth, id): a face at each crossing, else at each dip toward its surface or its nearest boundary approach; an edge at each stretch within the aperture; the pin's three nearest-or-list ray functions and their tolerances are dropped. A NURBS face passed near without a crossing is `Unsupported(Nurbs)` naming it, never sampled. | For: a ray through a cylinder or torus has every place it meets it (two, four), ordered the way a caller steps; one aperture is the only looseness; exact on analytic geometry. Against: the dip is a fixed 60-step search (70 units a dip); a ray parallel to a face at a standoff is picked at where it leaves it; a NURBS face near the ray is refused though far from it. | 74 §51 |
