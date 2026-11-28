@@ -4207,3 +4207,23 @@ The expected direction in section 8.2 held: build is 7 times fewer instructions 
 **Open questions.** (1) Whether PF2 belongs in `scx-boolean` (carry the box into the result) or in `scx-brep` (box ownership moves with the face). (2) Whether the slice should become a CI gate on instructions (deterministic) rather than a local record. (3) Whether `sample_rounding`'s 6.7% on plate-12 is the floor for MA6's bound.
 
 **Proposed 04 row.** "PF1 (72 §14.39): `scx-bench` has `slice` and `slice_ic` targets, 34 cases over `make`, `parts`, `build`, `mass`, `mass_full`, `classify`, `tess` and `wire` for the BX1 and BO6 recipes against the pin, instruction counts and wall time. Every case is under the 1.25 gate except `tess/gear-60`, whose pin side meshes no faces. Boolean build is 5 to 7 times fewer instructions than the pin on plate-12 and gear-60, mass 12 to 14 times fewer. Profile: build is 44% and 34% box construction repeated every step (PF2), 15% and 8% exact loops of untouched faces (PF3), classify 2% and 5%; mass is 49% the inner Kronrod loop, 14% plane evaluation (PF4) and 7% the rounding bound. No fix is made here. Against: wall times are warm-cache and from a loaded machine. Change if a pass gates on instruction counts."
+
+### 14.45 PF4 as built (11-27)
+
+**Built.** `face::Inner` (`scx-mass`) carries `plane: Option<PlaneAxes>`, the plane's origin and its `x` and `y` axes read once when the face's integrator is made. At each sample a plane takes `(O + X u + Y v)` and the axes as its derivatives, with no `Surface::jet` call (so no `Frame::y`, a cross product, and no `Plane::point` per sample). Every other surface goes through `jet::<1>` as before. No API change outside the private struct.
+
+**Bits.** Unchanged by construction: the expression is `Plane::point`'s (`origin + x * u + y * v`, same order, then `to_vec`), the derivatives are the stored axes `Plane::jet` returns, and `Frame::y` is a pure function of the frame, so reading it once gives the value it gave each time. The `NotFinite` return for a missing derivative cannot occur for a plane (its jet always carries both). The scx-mass tests and the mass difftests are the check (results below).
+
+**Measured** (`slice_ic`, scx side, instructions, same machine, before then after):
+
+| case | before | after | change |
+|---|---|---|---|
+| `mass/plate-12` | 757,603,054 | 635,080,594 | -16.2% |
+| `mass/gear-60` | 161,326,232 | 142,988,232 | -11.4% |
+| `mass_full/plate-12` | 2,080,971,847 | 2,014,996,537 | -3.2% |
+
+Nothing rose. The saving is more than the 14% PF1 named because the generic `jet::<1>` also built a `SurfaceJet` and matched on the surface kind per sample.
+
+**For and against.** For: the arithmetic is the same, the change is local to one struct, and it touches no other crate. Against: a second place that knows a plane's point formula (a change to `Plane::point` must be mirrored; the mass difftests and a bit-comparison against the pin would catch a drift). The alternative, a `Surface::axes`-style accessor or caching `y` in `Frame`, would help every caller but changes `scx-num`'s `Frame` layout; not taken here, left to whoever finds another plane-heavy loop. Curved analytic surfaces keep `jet`, where the trigonometry dominates and nothing is recomputed that could be hoisted.
+
+**Proposed 04 row.** "PF4 (72 §14.45): `scx-mass`'s inner integral reads a plane's origin and axes once per face and evaluates samples from them (the arithmetic of `Plane::point` and `Plane::jet`, same bits), instead of a `jet` call, a cross product for `Frame::y` and a point per sample. `slice_ic` instructions: `mass/plate-12` -16.2% (757.6 M to 635.1 M), `mass/gear-60` -11.4%, `mass_full/plate-12` -3.2%; nothing rose. Against: the plane's point formula is now written twice. Change if: `Frame` caches `y`, making the local copy unnecessary."

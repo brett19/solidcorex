@@ -56,6 +56,18 @@ pub enum BodyqRefusal {
         /// Which option.
         name: &'static str,
     },
+    /// A tolerance that is not finite or is negative, or an angle not below pi.
+    Tolerance,
+    /// An edge with fewer than two faces: nothing to compare across it.
+    OneSided {
+        /// The edge asked about.
+        edge: EdgeId,
+    },
+    /// An edge collapsed to a point: there is no curve to run along.
+    Collapsed {
+        /// The edge asked about.
+        edge: EdgeId,
+    },
 }
 
 /// What this method does not answer yet.
@@ -156,6 +168,9 @@ impl BodyqError {
             Self::Refused(BodyqRefusal::EmptyBody) => "empty_body",
             Self::Refused(BodyqRefusal::FrameTooFar) => "frame_too_far",
             Self::Refused(BodyqRefusal::BadOption { .. }) => "bad_option",
+            Self::Refused(BodyqRefusal::Tolerance) => "tolerance",
+            Self::Refused(BodyqRefusal::OneSided { .. }) => "one_sided",
+            Self::Refused(BodyqRefusal::Collapsed { .. }) => "collapsed",
             Self::Unsupported(BodyqUnsupported::Nurbs { .. }) => "nurbs",
             Self::Unsupported(BodyqUnsupported::NonManifold { .. }) => "non_manifold",
             Self::Unsupported(BodyqUnsupported::NoClearSide { .. }) => "no_clear_side",
@@ -169,7 +184,7 @@ impl BodyqError {
             Self::Defect(BodyqDefect::NoBoundary) => "no_boundary",
             Self::Defect(BodyqDefect::NoEdgeBox { .. }) => "no_edge_box",
             Self::Defect(BodyqDefect::Betti { .. }) => "betti",
-            Self::Defect(BodyqDefect::Tolerance) => "tolerance",
+            Self::Defect(BodyqDefect::Tolerance) => "bad_accuracy",
         }
     }
 
@@ -217,6 +232,15 @@ impl fmt::Display for BodyqError {
             }
             Self::Refused(BodyqRefusal::BadOption { name }) => {
                 write!(f, "the option `{name}` is not a finite length above zero")
+            }
+            Self::Refused(BodyqRefusal::Tolerance) => {
+                f.write_str("a tolerance is not finite or negative, or an angle is not below pi")
+            }
+            Self::Refused(BodyqRefusal::OneSided { edge }) => {
+                write!(f, "{edge}: fewer than two faces meet there")
+            }
+            Self::Refused(BodyqRefusal::Collapsed { edge }) => {
+                write!(f, "{edge}: collapsed to a point")
             }
             Self::Unsupported(BodyqUnsupported::Nurbs { at }) => {
                 write!(f, "{at}: NURBS geometry is not queried yet")
