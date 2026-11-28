@@ -3307,6 +3307,240 @@ machine does not allow `perf` events).
 
 | 11-27 | (For the owner's review) `scx_step::{build, import}` build the analytic subset (planes, cylinders, cones, spheres, tori; lines and conics) from the read's plan: the file's sharing is the topology (no vertex joining), each edge and vertex gap enclosed and, past the file's uncertainty, raised and recorded (R3; `Note::PastRatio` past the ratio), exact pcurves with a collapsed edge at each pole joint, parity then the certified volume sign (R4), and the import check. Disagreeing `same_sense` flags are turned and noted, not refused. NURBS, swept, offset, vertex-loop, seamless and non-manifold cases are typed `BuildError::Pending(Waits)`. Edges: brep, check, curve, mass, surface | Joining by distance and trusting flags over topology are heals and failing defaults; certified gaps make every accuracy a proof | 74 §29 |
 
+## 34. BW11 as built (11-28)
+
+The pin's small geometry, nine modules, `crates/scx-bodyq/src/{joint, face_pair,
+mid_sheet, mid_joint, cylinder_wall, cap, face_surface, round_face, reach}.rs`, all typed, none
+reading a pcurve, none with a fixed angle or length. The row's list is `face_pair`, `mid_sheet`,
+`mid_joint`, `cylinder_wall`, `cap`, `face_surface`, `round_face` and `joint_turn`; the vertex-joint
+tests BW4 left (§25.3) need the edge-turn module `joint_turn` lives in, so that is ported whole
+(`leaving`, `turn_at`, `convex_at`, `joint_turn`; `turn_to_parallel` stays with BW9's measure map).
+No new Cargo edge: the code uses `scx-surface`, `scx-curve`, `scx-nurbs` and `scx-num`, already
+normal dependencies. New refusals in `BodyqError`: `NoDirection`, `NotPositive`, `OnAxis`,
+`OffPlane`, `Corners`, `NotAnEnd`, `Seat`, `WrongSurface`, `NoMaterialSide`; `Unsupported(Probe)`;
+`Defect(Moved)`. One word of BW4's `along.rs` changed: `Field::of` is `pub(crate)`.
+
+### 34.1 API
+
+```rust
+// the constants of the pin's kernel, as the caller's resolution over the caller's reach
+pub struct Near; // Near::new(coincidence, reach), Near::of(res, acc, acc, reach)
+
+// joint.rs (vertex joints; the BW4 tests)
+pub fn joint_turn(before: [f64; 2], after: [f64; 2]) -> Result<f64, BodyqError>;
+pub fn leaving(&Brep, EdgeId, VertexId) -> Result<Leaving, _>;   // Direction(unit) | Missing(Closed|Collapsed|Stationary)
+pub fn turn_at(&Brep, e, f, v) -> Result<Turn, _>;               // Angle(f64) | Undefined { edge, why }
+pub fn convex_at(&Brep, e, v, smooth) -> Result<Convexity, _>;   // Convex | Concave | Tangent | Undecided | NoMaterial{face} | NoEnd(why)
+
+// face_pair.rs
+pub fn facing_planes(&OutwardPlane, &OutwardPlane, &Near) -> Result<Facing<FacingPlanes>, _>;
+pub fn facing_cylinders(&CylinderFace, &CylinderFace, &Near) -> Result<Facing<FacingCylinders>, _>;
+pub enum Facing<T> { Pair(T), Apart(Apart) }   // Apart: Tilted | SameWay | OffAxis | SameSide | Air | Thin
+pub fn outward_plane(&Brep, FaceId) -> Result<OutwardPlane, _>;  // read from the body
+pub fn cylinder_face(&Brep, FaceId) -> Result<CylinderFace, _>;
+pub fn material_toward_axis(axis_point, axis, point, outward, &Near) -> Result<bool, _>;
+pub fn round_directions(axis, along, &Near) -> Result<Directions, _>;
+pub fn axial_range_in(&CylinderFace, &CylinderFace, [Length; 2]) -> Result<[Length; 2], _>;
+
+// mid_sheet.rs, mid_joint.rs, cylinder_wall.rs
+pub fn wall_holds(&Wall, &[Point3], slack: Length) -> Result<Holds, _>;      // Yes | No { point: index }
+pub fn polygon_area(&[Point3]) -> Result<f64, _>;
+pub fn onto_plane(&OutwardPlane, Point3) -> Result<Point3, _>;
+pub fn in_frame(&Frame, Point3) -> Result<Point2, _>;  pub fn from_frame(&Frame, Point2) -> Result<Point3, _>;
+pub fn planes_meeting(&OutwardPlane, &OutwardPlane, &Near) -> Result<Meeting, _>;   // Line | Parallel | Unplaceable
+pub fn move_edge_onto_line(&[Point3], edge: usize, &Line3, coincidence: Length) -> Result<Moved, _>;
+                                                                        // Polygon | EdgeNotParallel | NeighbourParallel { edge }
+pub fn wall_frame(normal, w, axis, radius, convex, &Near) -> Result<Wrap, _>;       // Frame | NotParallel | NotTouching
+
+// cap.rs
+pub fn is_square_plane_at_height(&PlaneAt, origin, normal, height, &Near) -> Result<bool, _>;
+pub fn is_point_on_plane(point, normal, height, &Near) -> Result<bool, _>;
+pub fn is_face_on_plane(face_normal, corners, normal, height, &Near) -> Result<bool, _>;
+pub fn curve_lies_on_face(target, face, &Curve, Extent1d, tol, &mut Budget, &Stop) -> Result<Lies, _>;
+                                    // Yes | OffSurface { by } | OutsideTrim | Undecided
+pub fn prism_part(target, face, part, planar, section, &PrismCut, &Near, &mut Budget, &Stop)
+    -> Result<PrismPart, _>;        // Dropped | ReachesPast(FarCap | EmptySection | SectionOff{edge}) | Kept | Undecided{edge}
+
+// face_surface.rs (a view: kind, domain, point, normal, closest_point, recognized)
+pub fn face_surface(&Brep, FaceId) -> Result<FaceSurface<'_>, _>;
+
+// round_face.rs (the pin's recipe: the body is read through probes the caller answers)
+pub fn past_end(seat, radius, bore, reach, &Extent, &Near, probe: &mut dyn FnMut(&Probe) -> Met) -> Result<End, _>;
+pub fn stands_over(..), beside_clear(..), grow_block(..), far_end(..), into_seat(..), extent(..);
+pub fn extent_in(&Brep, &SeatFrame, &mut Cx) -> Result<Extent, _>;     // a moved copy, boxed by tight_body_box
+pub fn whole_band(&Brep, &SeatFrame, radius, &Near) -> Result<Band, _>; // Whole | Broken{face,edge} | Undecided{face,edge} | Absent
+```
+
+### 34.2 Method, and what the pin's constants became
+
+- **No angle tolerance (01 §4.2), so the angle is coincidence over size.** The pin tested "opposite
+  normals", "one axis", "parallel edge" and "square to a direction" within `ang_tol_rad` (half a
+  degree, at any size) and "thickness" and "same place" within `zone_tol_3d`. Here every such test
+  is [`Near`]: two unit directions make one line when `|a x b| * reach <= coincidence`, i.e. the lines
+  stay within coincidence over the stretch the faces span. The reach is the caller's (the face's or
+  edge's size); `mid_joint` takes each edge's own length. A half degree at one metre is 9 mm and
+  would pair a wall with a skew of nine millimetres; at 100 mm and a coincidence of 1e-5 the limit is
+  1e-7 rad. A face a millimetre across tolerates the half degree the pin used (test). The planes'
+  actual skew over the reach is returned ([`FacingPlanes::skew`]).
+- **Coincidence is `coincident(res, acc_a, acc_b)`**, from the faces' recorded accuracies, not the
+  kernel's zone.
+- **`Option` for "not a pair" becomes the reason.** `Facing::Apart(Apart::Tilted | SameWay | OffAxis |
+  SameSide | Air | Thin)`, `Wrap::{NotParallel, NotTouching}`, `Meeting::{Parallel, Unplaceable}`,
+  `Moved::{EdgeNotParallel, NeighbourParallel}`. The pin collapsed them to `None`.
+- **`convex_at` is a proof.** Each face's unit normal into the material is its closed-form normal
+  field (`along::Field`, BW4) enclosed in intervals at the edge's end, the direction from the edge into
+  the face is that face's natural normal crossed with the edge's jet over the end parameter, turned by
+  the use's sense (the loop runs counter-clockwise about the natural normal); convex iff the direction
+  into face b has a positive part along face a's normal into the material. Both readings (b into a,
+  a into b) are enclosed, and `Convex`/`Concave` is returned when a certified sign exists and they do
+  not disagree. Faces whose normals into the material are proved within `smooth` are `Tangent`,
+  the rest of the unproved `Undecided`. The pin's `None` meant tangent, undecided, closed edge and
+  no material alike.
+- **`joint_turn` and `turn_at`** use `atan2(|a x b|, a . b)` (good to rounding at 0 and pi alike); a
+  direction of no length is refused at any scale (the pin's `angle_between` had an absolute zero:
+  `[1e-200, 0]` was "no direction"; here it is a direction, a test).
+- **`planes_meeting` places the line's point from the first plane's own point**, not from the planes'
+  offsets from the origin: the same line, with no cancellation at a far corner (a test at 1e9).
+- **`curve_lies_on_face`** (the pin's `edges_lie_on_face`, sampled): on the surface by
+  `curve_surface_gap` (SU6, a bracket, `OffSurface { by }` is a lower bound); inside the trim by
+  (a) lying within `tol` of one of the face's own edges (`curve_curve_gap`), else (b) the curve's uv
+  image enclosed over pieces by `pcurve_of` and `Ivl`, each cell read by `Face::side_of_cell` (BW2):
+  all `Inside` proves, an `Outside` cell refutes, a `Near` cell is halved up to 40 times, then
+  `Undecided`. A NURBS target face is `Unsupported(Nurbs)` (`GapError::Pending`).
+- **`round_face`** keeps the pin's design: bodyq is below `scx-boolean`, so the body is read through
+  [`Probe`]s (a ring or disc about the axis over a stretch) that a caller with a Boolean answers with
+  the box of the piece in the seat's frame. The readings are the pin's, with `clear_of(r) =
+  1e-6 (1 + r)` as the `Near`'s coincidence, `same_size` as `max(1e-3 r, coincidence)`, and the
+  structural ratios named (`RIDGE` 10 and `BESIDE` 1,000 coincidences, `SAME_SIZE`, `SLOPE_TIE`).
+  An unread probe is `Unsupported(Probe)` (the pin read it as a shut end or as "not out", the
+  failing default R2 forbids); `extent_in` moves a copy by `into_seat` and boxes it with `tight_body_box`.
+  `whole_band` proves circles across the axis and lines along it; any other edge curve is `Broken`
+  when two of its points differ in height and in place round the axis (a witness: a sample may
+  refute) and `Undecided` otherwise. The pin read such an edge from 24 samples as proof.
+- **`face_surface`** is a view: the pin built a record face's surface (labels proved on NURBS forms,
+  blends, ball patches) because its body held records. A scx face holds its own `Surface`. What
+  remains is the pairing of the surface with the face's uv box (the nearest point is searched in
+  it), the kind, typed `normal` (`None` at a pole or apex), and `recognized` (SU7, the quadric a
+  NURBS face is, with the face's box clipped to the surface's knots).
+
+### 34.3 Cases for and against
+
+- **`Near` (coincidence over reach), not a named constant (`PARALLEL_ANGLE_RAD`).** For: the row says
+  constants from the resolution; the answer follows the faces' size; a thin wall on a small part is
+  not paired by an angle meant for a large one. Against: every caller supplies a reach, and a
+  too-large reach (the whole body) refuses to pair walls a drafted half degree off that the pin
+  paired; the row's "drafted wall needs the bisector construction" is not built either way.
+- **`Convexity` with five readings, not `Option<bool>`.** For: "tangent" and "no material" and
+  "undecided" are three different facts to a chain walker. Against: a caller wanting the pin's
+  `None` writes `matches!`.
+- **Reading the body through probes (as the pin), not a Boolean in bodyq.** For: layers.txt (bodyq is
+  below boolean); the tests drive the logic with a closed-form body of revolution. Against: the
+  recipe's cost lives with the caller's Boolean and cannot be bounded here.
+- **`whole_band` Undecided, not the pin's sampled yes.** For: R2. Against: a rim held as an
+  ellipse-or-NURBS circle (a spline's boundary) is `Undecided` until step 5 gives a certified
+  circle test for NURBS curves.
+- **Cross-crate calls in hot loops.** `Point3::distance_along` and `Vec3::length` are not
+  `#[inline]` in `scx-num`: a first `wall_holds` through `distance_along` ran four times the pin's
+  per point (9.5 ns against 2.0) and was brought level by writing the dot product inline. Not
+  changed in `scx-num`.
+
+### 34.4 Tests
+
+68 new tests in five files, closed-form truths (a plate 2 thick, a tube of radii 10 and 8, an L
+bracket's areas 780 and 580, a box's dihedrals, an L-section's one concave edge):
+
+- `tests/joint.rs` (9): the pin's corner turn (pi/2), line into tangent arc (turn 0, the wall's edge
+  pi/2 from both), L-section inside corner concave and outside convex (both ends), the two
+  `joint_turn` tests (plus 1e-200 and 1e200 scales, a 1e-9 turn exact to 1e-24, near pi), all 24
+  ends of a box convex, a stadium's tangent wall edge `Tangent`, a notch's rim convex and a bulge's
+  concave (cylinder normal sign), a sheet's `NoMaterial`, `leaving`'s refusals and a rim circle's
+  `Closed`.
+- `tests/wall.rs` (31): `face_pair` (plate, normal length, air/thin/same-way/tilted, the angle that
+  pairs at three reaches, point-independence of the tilted thickness, hostile input, a block's top
+  and bottom and sides read from the body), cylinders (tube, bend, seven non-pairs by reason, tilted
+  axis point-independence, hostile, a cylinder face's side), `material_toward_axis`,
+  `round_directions`, `axial_range_in`, `mid_sheet` (wall, tube, polygon areas incl. 2^27 from the
+  origin, plane drop, frame round trip), `mid_joint` (perpendicular, angled, far origin, parallel,
+  near parallel property over 2^-20..2^-60, L bracket areas, trim, each non-move and refusal),
+  `cylinder_wall` (two pin cases and the three ways of not touching), the cap tests.
+- `tests/cap.rs` (7): every edge of a cylinder on a face of it (circles on two, the seam on one),
+  every block edge on exactly its two faces, another body's edges on none of a block's, a curve in a
+  face's plane inside, beyond and across its trim, budget and stop, refusals and a NURBS target
+  face, `prism_part` kept, dropped, far cap, off-face and empty section.
+- `tests/round_face.rs` (18): the pin's 16 `teeth/tests/round_face.rs` readings against its body of
+  revolution (free end, shoulder, neck, chamfer rim, carried chamfer, round vs chamfer, long taper,
+  counterbore and entry chamfer, stands-over, beside-clear, map into the seat, far end, grow block,
+  hostile numbers), `extent_in` of real shafts (square and askew), `whole_band` on real bodies.
+- `tests/face_surface.rs` (3): block top, cylinder wall, a flat NURBS patch recognised as the plane.
+
+**Not ported, with what each proved:**
+
+| pin test | what it proved | here |
+|---|---|---|
+| `solidcore-ops` `face_pair`, `mid_sheet`, `cap` unit tests | the ops adapters convert arrays to the kernel's | the kernel tests above cover the values; there is no adapter |
+| `a_band_is_whole_only_with_rims_and_seams`'s sampled-points cases (rim and seam "held as other curves", the helix, an edge "known by nothing") | a record edge's samples decide a band | R2: samples may refute only. Real bodies replace the records; the helix case is the `Broken` witness, the rest `Undecided` |
+| `into_seat` of a plane with `x_axis == y_axis` (`Seat` refusal), `whole_band` on it | a frame that spans no plane is refused | a `Frame` is square by construction |
+| `past_end(.., None, ..)` on an unread body | an unread extent shuts the end | not representable: the extent is typed, the caller handles its own `extent_in` error |
+| the 10-hostile-value loops on `past_end` that assert a shut end | no panic, shut answer | no panic and a typed refusal; asserted per number |
+| `face_surface` conversion tests (a label dropped when its numbers are off its form, a ball patch certified on its sphere, a torus label on a short tube arc, a plane "a little off square goes back square") | the record-to-kernel conversion | there is no conversion; SU7's tests hold `recognize` |
+| `face_surface_eval` (blends, `circle_round_torus`) | a blend or round's definition certified | blends do not exist here |
+| ops `cap::edges_lie_on_face` on a made cylinder via `to_record` | the section edge lies on a face | `cap.rs` tests on `scx-testkit` bodies |
+
+### 34.5 Costs (release, mean of 200 to 10^6 calls, loaded server, pin in the same binary)
+
+| call | pin | here |
+|---|---|---|
+| `facing_planes` | 23 ns | 42 ns |
+| `facing_cylinders` | 17 ns | 28 ns |
+| `planes_meeting` | 21 ns | 50 ns |
+| `move_edge_onto_line` (4 corners) | 99 ns | 142 ns |
+| `wall_holds`, 1,000 points | 2.0 us | 1.9 us |
+| `polygon_area` (6 corners) | 15 ns | 16 ns |
+| `joint_turn` | 12 ns | 27 ns |
+| `turn_at` (a box corner) | 81 ns | 74 ns |
+| `convex_at`, the 24 ends of a box | 782 us | 17 us |
+| `curve_lies_on_face`, 12 edges x 6 faces of a box | 855 us | 2.4 to 3.0 ms |
+| `extent_in` (shaft, moved copy and boxed) | the pin's copy, transform and box | 232 us |
+
+The pure functions cost tens of nanoseconds more (the unit-vector helper divides by the largest
+coordinate so a huge or tiny vector keeps its direction). `convex_at` is 46 times faster: it reads
+one closed-form normal field, where the pin built the faces' use normals and a binormal through the
+evaluator. `curve_lies_on_face` is 2.8 to 3.5 times slower per call (33 to 42 us against 12 us): it
+proves rather than samples, and on a box face most calls are decided by the gap alone. Side-channel
+timers in a throwaway crate; nothing is committed.
+
+### 34.6 Deviations
+
+- Every tolerance as `Near` (34.2). The row asked for constants from the resolution; an angle needs
+  a size, so the API takes one.
+- `turn_to_parallel` is not ported (BW9's map lists it).
+- `Frame`/`in_frame`/`from_frame` use `scx_num::frame::Frame` (square by construction), not the pin's
+  `Frame { origin, x, y }`.
+- `MAX_POINTS`, `MAX_CORNERS` and `MOST_PROBES` are dropped: a linear pass over the caller's slice
+  needs no cap, and the probe count is fixed by each reading's structure (at most six).
+- `cylinder_wall`'s contact "within `10 tol`" is "within coincidence": the pin's callers passed their
+  own tolerance and the factor was a hedge.
+- `Probe` and `Met` carry `f64` millimetres, as geometry does (`units.rs`): lengths that are
+  tolerances are `Length`.
+- A change of one visibility word in BW4's `along.rs` (`Field::of`).
+
+### 34.7 Open questions
+
+1. Should `Near`'s reach be the face's own size by default (`Near::of_face`)? The caller now computes it.
+2. A drafted wall (planes a degree or two off parallel) has no pairing (the pin had none either): the
+   bisector construction is wanted by sheet-metal callers and is not in the row.
+3. `curve_lies_on_face` leaves a curve that crosses a periodic face's uv seam `Undecided`
+   (its cells meet the boundary there at every depth). A `Near` cell within `tol` of a face
+   edge could count as boundary; not done.
+4. `whole_band` for a NURBS-held circle needs a certified circle test on NURBS curves (step 5).
+5. `Point3::distance_along` and `Vec3::length` in `scx-num` would gain from `#[inline]` for every
+   caller loop (34.3); that is a change to a layer below, left to its owner.
+6. `convex_at` for a NURBS face is `Unsupported(Nurbs)` with the other NURBS answers; it is
+   reached only past the material check, so a NURBS sheet reads `NoMaterial`.
+
+### 34.8 Proposed 04 row
+
+| 11-28 | (For the owner's review) **BW11: vertex joints and thin-wall geometry in scx-bodyq.** `joint_turn`, `leaving`, `turn_at` and `convex_at` (a proof from BW4's normal fields: `Convex`/`Concave`/`Tangent`/`Undecided`/`NoMaterial`) at a vertex; `facing_planes`, `facing_cylinders`, `wall_holds`, `planes_meeting`, `move_edge_onto_line`, `wall_frame` and the cap tests as closed forms; `curve_lies_on_face` (certified gap plus the face's own boundary test, `Yes`/`OffSurface`/`OutsideTrim`/`Undecided`), `prism_part`; `face_surface` as a view of the face's own surface; the `round_face` family read through caller-answered probes, `whole_band` by proof or witness. No fixed angle: "parallel" is `|a x b| * reach <= coincidence` over a `Near` the caller builds from the faces' accuracies and size. Unread probes and unprovable edges are typed, not defaults. NURBS faces are `Unsupported(Nurbs)`. Edges: none | 74 §34 |
 ## 28. CF2a as built (11-27)
 
 Task CF2a (§8): the certified gaps on analytic geometry, the wide vertex, the degenerate edge,
