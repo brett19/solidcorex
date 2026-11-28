@@ -4267,7 +4267,7 @@ Tests (none removed):
   - An empty piece with one unit less than the budget it needs is `Exhausted { item: 0 }`.
 - **RP1's 8 tests in `tests/heal.rs` are unchanged and pass.**
 
-### 13.51 RP5 as built (11-28)
+### 13.58 RP5 as built (11-28)
 
 The sew within a gap, `scx_repair::sew`, over a widened `scx_stitch` (ST5's `sew`).
 
