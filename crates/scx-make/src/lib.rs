@@ -32,6 +32,9 @@ mod cone;
 mod cylinder;
 mod error;
 mod extrude;
+mod prism;
+mod radial;
+mod sheet;
 mod sphere;
 mod torus;
 
@@ -40,6 +43,9 @@ pub use cone::{ConeFaces, cone};
 pub use cylinder::{CylinderFaces, cylinder};
 pub use error::{Defect, Dimension, MakeError, Refusal, Unsupported};
 pub use extrude::{ExtrudeFaces, Span, extrude};
+pub use prism::{PrismFaces, prism};
+pub use radial::{RadialCone, RadialFaces, radial};
+pub use sheet::{SheetFaces, sheet};
 pub use sphere::{SphereFaces, sphere};
 pub use torus::{TorusFaces, torus};
 

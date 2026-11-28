@@ -4351,6 +4351,613 @@ with the other (degree <= 4), exact signs on coefficients, exact point arithmeti
 is exact; no tolerance but the `Resolution`. The pin's touch-at-the-foot, 1e-14 parallel and `atan2`
 slack rules are not ported.
 
+## 35. CF2b as built (11-28)
+
+CF2b takes on §28.9 items 1 and 2, and adds 04 SP2's recorded-certificate acceptance. Every
+answer stays a certified `Bracket`, and every curved row of §28.8 is at least as decisive as
+before: the same findings, nothing undecided, and fewer work units.
+
+### 35.1 What the profile showed
+
+Callgrind on `torus 4` put 77% of the time in `gap::direct`: `Surface::box_over` on the pcurve's
+enclosure, through `Torus::eval::<Ivl>` and the quarter-arc `cos_sin`. The other cost is the
+piece count. A full-turn circle's pcurve bound shrank with the piece width cubed, so it needed
+250 to 500 points to get under `re`. A cheaper jet (§28.9's second remedy) would only have cut
+the cost per point. A Taylor or mean-value jet of any finite order (its first remedy) would only
+have raised the order of convergence: the piece count still grows as the zone tightens, because
+the enclosure of `S(p(t)) - C(t)` does not see that its parts cancel. What removes the piece
+count is to build the difference on exact trigonometric coefficients, so the cancellation happens
+in the coefficients and not in the enclosure. The curve-to-surface gap already does this (§17).
+That is what CF2b builds; neither remedy as worded in §28.9 was built.
+
+### 35.2 The series lift
+
+`PcurveField` gains `lift: Option<Lift>`, with `Lift { d: [Series; 3], pad }`, where `d` is
+`S(p(t)) - C(t)` in world coordinates as trigonometric series of degree at most 2 in `t`.
+`at` and `over` use it in place of the jets and `direct`. The mark is the series' own `|D|`; the
+pad is added to the bracket and to the bound. The edge's curve must be a circle or an ellipse, and
+its coefficients come from `trig_parts`, the helper `Source::new` now shares. The cases:
+
+| pcurve | surface | built from |
+|---|---|---|
+| `AngleLine2`, axis `U`, `rate == 0` | cylinder, cone, sphere, torus | `O + f (cos phi X + sin phi Y) + g Z`, with `f` and `g` the kind's radius and height at `v = other` (on a sphere and torus, the `V` arc formula at `other`, hulled over both sides of a break) |
+| `AngleLine2`, axis `V`, `rate == 0` | sphere (half turn), torus | `f = R + r cos theta`, `g = r sin theta`, turned by the `U` arc formula at `u = other` |
+| `AngleWave2` | cylinder, cone | `v = mean + c cos t + d sin t`; `f = r` or `r + k v` |
+| `Circle2` / `Ellipse2` | plane | `O + u X + v Y` with `(u, v)` the pcurve's own coefficients; exact, pad 0 |
+
+In each case the pcurve's arcs must equal the kind's (`Arcs` derives `PartialEq`). Anything else
+takes the general path as before: a line, a NURBS pcurve, a sloped `AngleLine2` (a helix), another
+radius's arcs, or an arc index past 64 quarters.
+
+**The pad.** In exact arithmetic on its rounded constants, the pcurve's arc parameter, read back
+through the kind's arc formula, is the angle `phi` turned by a fixed `e_k` per arc and scaled by
+`1 + d`. Here `e_k` is the rounding of the arcs' start and of `k pi/2 + pi/4`, so
+`|e_k| <= (|k| + 2) 2^-52 pi/2`, and `|d| <= 2^-53` comes from the rounded `1/sqrt 2` of the arc's
+middle turn. A parameter a few ulps past a break, where the two sides choose different arcs, adds
+an error of second order. `angle_pad(k) = (k + 4) 2^-48` per unit of turned radius covers the sum
+more than five times over. It is applied as `2 |f|` (or `2 sup|f|` for a wave) for the `U` cases
+and `4 r` for the `V` cases. On the testkit bodies the pad is about 1e-13, against a zone of 1e-5.
+
+Choices, with cases for and against:
+
+- **Coefficients, not a better jet.**
+  - For: a coaxial circle is zero to rounding and closes in the 5 seed points, whatever the zone.
+    The cost per point is a degree-2 trigonometric series per coordinate, not a `box_over`.
+  - Against: the lift covers only the listed shapes. A sloped `AngleLine2` or a NURBS pcurve keeps
+    the cubic path. Both are rare on analytic bodies (the build writes these exact forms), and
+    neither is slower than before.
+- **The pad is derived, not measured.**
+  - For: it rests only on the formulas' rounded constants, not on samples. At about 1e-13 on the
+    testkit bodies, it is eight orders below the zone.
+  - Against: it ties the lift to the arc formula in `scx-curve::arcs`. If those formulas change,
+    the derivation must be redone. The doc comment on `angle_pad` says so.
+- **The pad is not in the mark.**
+  - For: the marks feed `vector_bound`'s ends, which must be the series' own values; the pad is
+    added once, on the result.
+  - Against: none found.
+
+### 35.3 The cone generator
+
+On a line, the signed distance across a cone, `(rho - r - k z) / sqrt(1 + k^2)`, is convex in the
+line's parameter: `rho` is the norm of an affine map and `z` is affine. Where the foot is on the
+nappe (`w > 0` over the piece), `convex_bound` bounds `|perp|` from above by its ends and from
+below by its end tangents, taking the lower of the two where they cross. This converges at second
+order with no second derivative. The chord bound needed an enclosure of `rho''`, which is zero in
+truth along a generator but wide in intervals. `ToSurface::over` takes the smaller of the chord
+bound and `convex_bound`. Any non-finite end jet (a line through the axis) decides nothing, and
+the chord bound stands.
+
+The testkit cone's seam generator against its whole cone fell from 157,919 units to 1,001. A
+generator kept off the apex closes in at most 64 units (test). The 1,001 left are the pieces next
+to the apex: there `w` reaches 0, `convex_bound` is not used, and the apex distance's chord decides
+alone. §28.9 item 2's "closed form" is this bound. A full closed form (the line's own distance as
+the larger of its two ends) would need the foot on the nappe over the whole line, which a
+generator through the apex does not have.
+
+### 35.4 A recorded certificate (04 SP2)
+
+`scx-check`'s gap pass takes a recorded `Basis::Certified(cert)` as decided under `Scope::Import`
+and `Scope::Stitched` when `cert.claim` is the question's claim and `cert.bound` is within the
+question's allowance. A use's `PcurveOnSurface` decides the use, and through it the face within
+`re`. An edge's `CurveToIntersection` decides its faces. `Scope::Full` proves everything. The
+claim's reads (`Reads`) are not compared, because the claim names the question.
+
+Choices, with cases for and against:
+
+- **For:** this is the cache 04 SP2 asks for. A body whose recorder certified a gap is not proved
+  twice on import, and a body without such records is proved as before.
+- **Against:** it trusts the recorder. A wrong `Certified` record goes unchecked outside `Full`.
+  That is the point of `Basis::Certified` versus `Unproven`, and `Full` remains the check of the
+  recorder.
+- **It saves nothing on SP2's plates today.** `scx-step`'s build records an edge's gap only past
+  the zone, and records within-zone gaps as `None`. It certifies no pcurves, since the exact writer
+  makes them. So every plate edge is still proved. The plate times below drop because of the
+  series lift (circles on cylinders and `Circle2` on planes), not because of the acceptance. If the
+  build recorded its within-zone certified gaps, the acceptance would skip them. That is for SP2's
+  owner (open question 2).
+
+### 35.5 Tests
+
+These are new; none was removed or changed.
+
+`scx-surface` (`gap/tests.rs`). Each test checks a certified bracket holding the closed-form truth
+(0, or the shift of a moved edge), and that the lift is taken where expected:
+
+- `a_coaxial_full_circles_pcurve_on_a_cylinder_closes_at_once`: a full turn and a part turn off a
+  break; at most 8 units; a moved edge holds 1e-3.
+- `a_cones_circle_and_a_spheres_latitude_and_meridian_close_at_once`: a cone's circle, a
+  latitude, and a meridian half on the half turn.
+- `a_toruss_circles_close_at_once`: an equator, a parallel, and a tube circle (`V`).
+- `a_circles_pcurve_in_its_plane_closes_at_once`: `Circle2` on a tilted plane; lifted 1e-6.
+- `a_pcurve_not_of_its_kinds_arcs_takes_the_general_path`: another radius's arcs, and a line
+  edge, give no lift.
+- `a_cones_generator_closes_in_few_pieces`: a generator and a parallel 1e-3 off the cone; at most
+  64 units; the width-aimed bracket holds the truth.
+
+`scx-check` (`tests/gaps.rs`):
+
+- `a_recorded_certificate_decides_its_question_outside_full_only`: true edge and use
+  certificates are believed under `Import` and `Stitched` and proved under `Full`. A wrong claim
+  (`EndsAtVertex`, or `PcurveOnSurface` on the edge, `CurveToIntersection` on a use), a bound past
+  the allowance, `Unproven`, `Measured`, and no record are all proved under every scope.
+- `true_certificates_save_the_proof_and_change_no_answer`: a cylinder, a sphere and a torus with
+  true use certificates are clean under both `Import` and `Full`, and `Import` spends less work.
+
+All CF2a tests pass unchanged.
+
+### 35.6 Measurements
+
+The timer harness was not committed. Figures are the release mean of 20 `Scope::Full` checks at
+zone 1e-5. Each binary was built in its own worktree's target, and the before and after binaries
+were run alternately, twice each, on one machine under a load average of about 14. "Before" is
+the branch's merge of main before CF2b.
+
+| body | edges | before (us) | after (us) | before work | after work |
+|---|---|---|---|---|---|
+| block 1 | 12 | 186 to 205 | 186 to 228 | 276 | 276 |
+| block 4 | 192 | 3,051 to 3,226 | 3,097 to 3,552 | 4,416 | 4,416 |
+| cavity 4 | 384 | 6,069 to 6,329 | 5,931 to 6,957 | 8,832 | 8,832 |
+| checker 4 | 140 | 2,443 to 2,574 | 2,435 to 2,736 | 3,412 | 3,412 |
+| loose block 4 (1e-6) | 192 | 2,796 to 2,989 | 2,794 to 3,132 | 4,416 | 4,416 |
+| cylinder 1 | 3 | 7,079 to 7,486 | 141 to 163 | 1,109 | 69 |
+| cone 1 | 3 | 4,829 to 5,143 | 172 to 198 | 568 | 48 |
+| sphere 1 | 3 | 15,585 to 16,813 | 139 to 160 | 287 | 27 |
+| sphere 4 | 12 | 62,964 to 66,274 | 338 to 390 | 1,148 | 108 |
+| torus 1 | 2 | 100,998 to 123,529 | 62 to 71 | 1,566 | 46 |
+| torus 4 | 32 | 321,633 to 484,654 | 880 to 1,010 | 5,856 | 736 |
+
+The planar rows are unchanged within noise: they take no new path and their work is identical.
+The after binary's second run was the slower one on every row, planar included, which is the
+machine's load, not the change. Curved edges now cost 28 to 66 us each, against 1.6 to 62 ms.
+`torus 4`'s 736 units are 23 per edge, as on a planar edge. Every row has 0 found and 0
+undecided before and after.
+
+Per call (testkit bodies of size 1, `Aim::Decide` at 1e-5):
+
+| call | before | after |
+|---|---|---|
+| circle's `AngleLine2` on a cylinder | 273 units, 7.6 ms | 5 units, 54 to 72 us |
+| `Circle2` on a plane | 257 units, 3.6 ms | 5 units, 44 to 66 us |
+| circle's `AngleLine2` on a cone | 273 units, 10.3 ms | 5 units, 66 us |
+| latitude on a sphere | 135 units, 9.8 ms | 5 units, 18 to 21 us |
+| circles on a torus | 497 / 273 units, 38 / 21 ms | 5 units, 19 to 21 us |
+| cone's seam line against the whole cone | 157,919 units, 0.66 to 1.2 s | 1,001 units, 3.5 to 6.0 ms |
+| torus's inner circle against the whole torus | 325 units | 325 units (unchanged) |
+
+The "before" per-call times are from an earlier run on the same machine; the units are exact.
+
+SP2's plates (§29.7's grids), `import` best of 5 (3 from 10x10), with the before and after
+binaries run back to back:
+
+| plate | faces | edges | before (ms) | after (ms) |
+|---|---|---|---|---|
+| 1 hole (1x1) | 7 | 15 | 12.9 | 1.4 |
+| 16 holes (4x4) | 22 | 60 | 186.0 | 11.8 |
+| 100 holes (10x10) | 106 | 312 | 1,112.6 | 63.0 |
+| 400 holes (20x20) | 406 | 1,212 | 4,162.1 | 250.6 |
+
+The brief named 25- and 100-hole plates. The sizes measured are §29.7's grids, which have the
+same face counts as its labelled files: 7, 22, 106 and 406 faces. All have 0 findings and 0
+undecided before and after. The whole gain is the series lift: SP2's build records a gap within
+the zone as `None` and certifies no pcurve, so §35.4's acceptance finds nothing to accept on
+these files.
+
+**Other callers.** `curve_surface_gap`'s other callers (`scx-step`'s build and
+`scx-bodyq::curve_lies_on_face`) take a new path only for a line against a cone, and there only
+when the foot is on the nappe, where the result is the smaller of the old bound and the new one.
+`Source::new`'s coefficients are the same arithmetic, moved into `trig_parts`. `pcurve_edge_gap`
+has no caller outside `scx-check`. `point_point_gap` (meet) and `vertex_curve_gap` (axial) are
+unchanged.
+
+### 35.7 Deviations and open questions
+
+Deviations from §28.9 and the brief:
+
+- Neither of §28.9's first two remedies was built as worded (§35.1).
+- The plates are §29.7's grids, not 25 and 100 holes.
+
+Open questions:
+
+1. **A line through a cone's apex.** It still spends about 1,000 units near the apex. A bound for
+   `w <= 0` (the apex distance is convex too: the norm of an affine map) would close it. It is not
+   built because no valid body here asks for it.
+2. **Within-zone records.** Should SP2's build record its within-zone certified gaps, so that
+   §35.4's acceptance saves the import check's proof?
+3. **The torus inner circle against the whole torus** costs 325 units on the existing
+   curve-to-surface path. The check asks for it only when no pcurve settles the face, which does
+   not happen on the testkit bodies. It is the largest curved call left in `bench_edges`.
+
+### 35.8 Proposed 04 row
+
+| 11-28 | (For the owner's review) The pcurve-to-edge gap lifts, as trigonometric series in the edge's parameter, every exact analytic pcurve whose difference from a circle or ellipse edge is one: a constant-height or constant-angle `AngleLine2` on a cylinder, cone, sphere or torus, an `AngleWave2` on a cylinder or cone, and a `Circle2`/`Ellipse2` on a plane. The arcs must match the kind's, and the bound is padded by `angle_pad` (derived from the arc formulas' rounded constants). Every other pcurve takes the jets. A line against a cone, with its foot on the nappe, is also bounded by its convexity. Under `Scope::Import` and `Scope::Stitched`, a recorded `Basis::Certified` gap whose claim is the question's and whose bound is within its allowance is taken as decided; `Scope::Full` proves everything. No new edges | Closes 74 §28.9 items 1 and 2 (the apex side stays open, §35.7) and builds 04 SP2's recorded-certificate acceptance | 74 §35 |
+
+## 36. ST3 as built (11-28)
+
+The orientation stage of §4.3 (step 5) in `scx-stitch`, new module `src/orient.rs`. For
+`Want::Solid` the stitched sheets become the boundary of solids, or the stitch says by a typed
+error, naming the entity, why it cannot. ST2's placeholders `Unsupported(Solid)` and
+`EdgePending::Region` are gone. 15 new tests in `tests/orient.rs`, checked against closed-form
+volumes; one ST2 test removed. Cargo: stitch → mass (§11 row 2, for `volume_sign`) and stitch →
+bodyq (back, for `classify_point`); both are already below stitch in §4.3's layer graph. The
+cut stage's box queries now reuse one buffer (§32.7 open question 4): scx-algo's `BoxTree` gains
+`overlapping_in`.
+
+### 36.1 Public API (changes from §32.1)
+
+```rust
+// scx-algo
+#[derive(Debug, Clone, Default)] pub struct Overlaps { /* stack, found */ }   // + const fn new()
+impl<B: Bounded> BoxTree<B> {
+    pub fn overlapping_in<'s>(&self, q: &B, tol: f64, space: &'s mut Overlaps) -> &'s [usize];
+}   // `overlapping` is now `overlapping_in` with a fresh `Overlaps`, collected
+// scx-stitch
+pub enum StitchRefusal { ..., RegionsMeet { edges: [(Operand, EdgeId); 2] },
+    NotSolid { operand: Operand, at: Entity, why: SolidFault } }
+pub enum SolidFault { Open, Wire, LoneVertex, NotOrientable }              // + name()
+pub enum StitchUnsupported { ..., SolidOperand { operand: Operand },        // - Solid
+    Undecided { operand: Operand, edge: EdgeId },
+    Sign { operand: Operand, face: FaceId, why: SignPending },
+    Nesting { operand: Operand, at: Entity, why: NestingPending } }
+pub enum SignPending { Undecided, NoSeries, Winding, NoBox }                // + name()
+pub enum NestingPending { Nurbs, Unclear, Touching }                        // + name()
+pub enum EdgePending { ... }                                                // - Region
+```
+
+All new enums are `#[non_exhaustive]`, `Copy`, with stable `name()`s. The new `StitchError`
+names: `regions_meet`, `not_solid`, `solid_operand`, `undecided`, `sign_pending`,
+`nesting_pending` (`solid_pending` is gone). `Stitched` and `StitchReport` are unchanged: a
+solid's report is the same report its sheets would have.
+
+### 36.2 Method
+
+In this model a face's orientation is its sides record `[front, back]`, not a flag on the
+surface. A sheet's faces have one shell (in `OUTSIDE`) on both sides. Orienting a closed sheet
+shell is choosing, per face, which side the material is on, and giving that side a new shell of
+a solid region. No surface is flipped and no loop is reversed.
+
+1. **Closed.** An operand that is already a solid (a sheet in a non-outside region, or a face
+   with two different sides) is `Unsupported(SolidOperand)`, until a solid operand's region is
+   defined (§36.6). A wire edge or lone vertex anywhere is `Refused(NotSolid { Wire | LoneVertex })`.
+   Every curve edge of a sheet shell must then have exactly two fins; a collapsed edge (a pole)
+   bounds nothing and is skipped. An open edge is `Refused(NotSolid { at: Edge, why: Open })`,
+   or `Unsupported(Undecided { edge })` when ST2's budget share left its join undecided (the
+   edge is in `report.left` as `Undecided`).
+2. **Parity.** Each connected set of faces of a sheet shell (a *unit*) is labelled breadth-first
+   from its least face. Across an edge with fins a and b, opposite senses put the material on
+   the same side of both faces, one sense on opposite sides. A seam (a and b on one face) must be
+   in opposite senses. A contradiction is `Refused(NotSolid { at: Edge, why: NotOrientable })`.
+3. **Outward.** A trial body (a clone of the draft) gives each unit its own solid region on
+   the side parity chose from the least face's back, and MA4's certified `volume_sign` of that
+   region's shell decides: `Negative` flips the unit. `Undecided`, a face with no series, a
+   winding the sign cannot use, or no box are `Unsupported(Sign { face: the unit's least face })`;
+   `Exhausted` and `Cancelled` pass through.
+4. **Nesting.** Units whose boxes overlap (`BoxTree::self_pairs`) and where one box holds the
+   other are tested: one vertex of the inner unit at a time is classified (`classify_point`)
+   against a body made of the outer unit alone, solid on its outward side. `In` means held, `Out`
+   means not, `On` tries the next vertex; all `On` is `Unsupported(Nesting { Touching })`. A
+   unit's depth is the number of units holding it and its parent the holder at depth − 1 (if
+   the holders do not nest in a chain, `Touching`). Even depth bounds a solid; odd depth a cavity:
+   its inside is a void region, its outside a shell of the parent's solid. A NURBS face in the
+   query is `Nesting { Nurbs }` (step 5's ray, R4).
+5. **Finish.** When no sign is negative and nothing nests (the common case), the trial body is
+   the answer and the stitch finishes once. Otherwise the draft is labelled again by the plan
+   and finished.
+
+Separately, ST2's join of two edges whose faces lie in different regions is now
+`Refused(RegionsMeet { edges })`, naming both operand edges: with sheet-only operands
+(step 1) it cannot happen, so it is a refusal, not pending work.
+
+### 36.3 Choices, with cases for and against
+
+- **Sides, not flipped surfaces.** For: the sides record is the model's orientation; flipping a
+  surface would rewrite geometry and pcurves for no information. Against: a consumer that reads
+  only the surface normal sees an inward normal on some faces; it must read the sides record,
+  as every query in this repository already does.
+- **`Want::Sheets` does no orientation** (deviation from §4.3 step 5, "Sheets are oriented by
+  parity alone"). For: a sheet's faces have one shell on both sides, so parity has nothing to
+  record without inventing a front; the result is the same body either way. Against: a caller
+  wanting a consistently oriented open sheet (for an offset) has no such result. If wanted, it is
+  a separate `Want` that records a chosen side, not a change to `Sheets`.
+- **`NotSolid { at: Edge, why: Open }` names one edge**, not §4.3 step 6's
+  `NotClosed { open }` list. For: one typed refusal shape for every reason a stitch is not a
+  solid, each naming one entity, as other refusals do; the full list is `report.left` of the
+  same call with `Want::Sheets`. Against: a caller fixing a model must call twice to see every
+  open edge (open question 1).
+- **Trial body, then relabel.** For: `volume_sign` and `classify_point` take a finished `Brep`,
+  so the stitch makes one; the common case (one closed shell, outward by parity's first choice
+  or not) costs one finish if no flip. Against: a flip or a nest costs a second finish.
+- **Nesting by one vertex at a time.** For: a vertex of a closed shell that does not meet the
+  other unit is strictly in or out, `classify_point` is certified, and a touching vertex just
+  moves on. Against: two units that touch at every vertex (but not in faces) are `Touching`,
+  though they may nest; a face point would decide them (open question 2).
+- **The outer unit's body is built from scratch** (copied vertices, edges and faces), not by
+  removing faces from the trial body. For: it is a small, valid body of one unit; nothing else
+  in the draft can change the answer. Against: it copies each candidate container's faces once.
+- **Determinism.** Units are seeded from ascending faces, pairs come in `self_pairs` order and
+  holders are sorted; the permuted-input test checks the result bit for bit.
+
+### 36.4 The pin, mapped
+
+The pin (`heal/stitch/p2.rs`) carries an orientation per joined edge pair (`OrientType::Same`
+or `Opposite`) and lets the face uses' mates form regions as it stitches. It then finds the
+infinite region by firing rays (`FindInfiniteRegion`, floating) and sets void flags
+(`NestedSolid` alternates them by nesting, else `InfiniteRegionSwap`). Here parity labels sides
+after the joins, the outward sense is MA4's certified sign (`Undecided` reported, never
+guessed), and nesting is a certified `classify_point` or typed pending; no ray is fired. The pin's
+`stitch_faces_leaves_a_closed_cavity_void` (#21540) is ported as `the_pins_cube_with_a_cavity`
+with its numbers; its `stitched_solid_cavity_is_a_void` is covered by the cavity tests. The
+pin's cap-on-a-cube, lid and two-boxes stitches use solid operands or radial edges and wait on
+`SolidOperand` (§36.6).
+
+### 36.5 Tests
+
+`crates/scx-stitch/tests/orient.rs` (15; bodies from scx-testkit `bodies`, exploded to one sheet
+per face, some with a plane's frame and loops reversed so the face is flipped):
+
+- `a_stitched_block_is_its_volume`: a block in 1, 2 and 3 random steps; outward certificate,
+  volume 1.
+- `a_stitched_random_block_is_the_blocks_volume`: seeds 1-5, volume equals the block's.
+- `a_stitched_cylinder_is_pi_r2_h`: 3, 4, 6 steps; volume 2π.
+- `a_stitched_sphere_is_four_thirds_pi`: collapsed poles skipped by step 1.
+- `flipped_faces_are_oriented_by_parity`: half the faces flipped give the same solid.
+- `an_all_flipped_block_is_flipped_back_by_the_sign`: material in front of every face; the sign
+  flips the unit.
+- `a_stitched_cavity_is_a_void`: 27 − 1 = 26; one solid region, one void, two shells on the
+  solid; reversed order and flipped faces give the same.
+- `the_pins_cube_with_a_cavity`: the pin's #21540 test: 10³ − 4³ = 936, 24 joined, 12 faces,
+  every face between material and void.
+- `two_apart_blocks_are_two_solids_and_nested_ones_are_solid_void_solid`: two blocks give 2
+  solids, volume 2; a cube in the cavity gives 26.125 and solid, void, solid.
+- `permuted_sheets_give_the_same_bits`: three step orders and a rerun give one fingerprint.
+- `an_open_box_is_not_a_solid`, `one_sheet_is_not_a_solid`: `NotSolid { Open }` naming the edge.
+- `a_wire_beside_a_closed_box_is_refused`: `NotSolid { Wire }` naming the operand's edge.
+- `a_solid_operand_is_unsupported`: `SolidOperand`.
+- `sheets_keep_their_sides_without_want_solid`: `Want::Sheets` leaves every face `[S, S]`.
+
+Removed, on purpose: `tests/stitch.rs` `a_solid_is_pending`, which proved `Want::Solid` returned
+`Unsupported(Solid)`; that placeholder is gone and the tests above replace it. `box_tree.rs`
+`queries_match_brute_force` now also checks `overlapping_in` with one shared buffer. Not tested:
+`NotOrientable` and `Undecided`, which need a one-sided closed surface or an undecided join and
+are hard to build from analytic sheets (ST4).
+
+### 36.6 Measurements
+
+Release, server-class machine, median of 7 runs, before (main fb937a8) and after interleaved in
+two rounds; allocations by a counting allocator outside the repository; *work* is the bench's
+budget used, in its deterministic units (`Report::work`; unchanged, as the algorithm is).
+
+| case | work | allocs before → after | ms before (r1 / r2) | ms after (r1 / r2) |
+|---|---|---|---|---|
+| two 60x60, corner (no join) | 62,287 | 179,479 → 149,973 (−16%) | 20.45 / 19.76 | 23.34 / 19.17 |
+| two 60x60, seam | 64,083 | 182,203 → 152,872 | 26.43 / 22.69 | 26.95 / 22.40 |
+| two 60x60, half-offset seam | 65,501 | 190,256 → 160,717 | 27.31 / 23.25 | 27.39 / 23.00 |
+| checker 20x20 of 4x4 (no join) | 41,949 | 142,515 → 124,827 | 15.99 / 14.15 | 15.92 / 14.12 |
+| grid 20x20 of 4x4 (3,040 joins) | 170,138 | 403,749 → 376,029 | 94.05 / 86.15 | 93.73 / 86.37 |
+| `BoxTree` overlapping, 15,000 boxes and queries | 811 hits | 49,202 → 34,202 | 4.12 / 4.12 | 3.68 / 3.68 |
+| `BoxTree` overlapping, 1,000 | 3 hits | 2,679 → 1,679 | 0.108 / 0.105 | 0.100 / 0.087 |
+| `BoxTree` self_pairs, 15,000 (unchanged) | — | — | 0.716 / 0.709 | 0.707 / 0.702 |
+
+The buffer removes one allocation per cut query; time is within the machine's noise (the
+corner's round 1 is +14%, round 2 −3%, on a shared machine). `overlapping` itself, used by
+other crates, is 11% faster. The 10x10 and 30x30 cases move the same way.
+
+Cost of orientation (`Want::Solid` against `Want::Sheets` on the same exploded body, after):
+
+| body | Sheets work / allocs / ms | Solid work / allocs / ms |
+|---|---|---|
+| Block, 2 steps (24 faces) | 1,831 / 3,688 / 1.05 | 6,487 / 10,133 / 1.83 |
+| Block, 5 steps (150 faces) | 11,533 / 21,972 / 6.26 | 40,633 / 61,251 / 10.49 |
+| Block, 10 steps (600 faces) | 46,183 / 86,950 / 24.33 | 162,583 / 243,222 / 41.65 |
+| Cavity, 3 steps (108 faces) | 8,287 / 15,887 / 4.28 | 29,242 / 56,277 / 7.99 |
+| Cylinder, 8 steps (10 faces) | 8,029 / 10,080 / 20.27 | 11,377 / 14,671 / 21.33 |
+
+Orientation is linear in faces and adds about 70% on planar blocks (a trial finish and the
+certified sign) and 5% on the cylinder, where the joins dominate. `Want::Sheets` does
+no new work.
+
+### 36.7 Deviations and open questions
+
+Deviations from §4.3 and the ST3 row: `Want::Sheets` is not oriented (§36.3); `NotClosed { open }`
+is `NotSolid { at, why: Open }` naming one edge; solid operands are `Unsupported(SolidOperand)`;
+ST2's `EdgePending::Region` becomes `Refused(RegionsMeet)`.
+
+Open questions:
+
+1. **All open edges.** Should `NotSolid { Open }` carry every open edge (a `Vec`) so one call
+   shows them, or is `Want::Sheets`' `report.left` enough?
+2. **Touching units.** Two units that meet only at vertices are `Nesting { Touching }`. A point
+   inside a face of the inner unit would decide them; should nesting classify a face point when
+   every vertex is `On`?
+3. **Solid operands.** Stitching a sheet to a solid (a cap on a cube) needs the solid's region
+   to meet the sheet's material; it is `SolidOperand` now. Which ST row owns it?
+4. **Orientation cost.** About 70% over `Want::Sheets` on planar blocks. A sign straight from the
+   draft (no trial finish) or one sign per unit from its least face's neighbourhood would cut
+   it; neither is certified yet.
+5. **Build infrastructure.** Not a repository question; recorded in the hand-back.
+
+### 36.8 Proposed 04 row
+
+| 11-28 | (For the owner's review) The stitch's orientation stage: for `Want::Solid` each closed sheet shell's faces are labelled by edge parity from the least face, MA4's certified `volume_sign` of a trial body's region decides outward, and nesting is decided by `classify_point` of the inner unit's vertices against the outer unit alone (even depth solid, odd depth void); orientation is the faces' sides record, no surface is flipped. Every failure names its entity: `Refused(NotSolid { Open, Wire, LoneVertex, NotOrientable })`, `Refused(RegionsMeet)`, `Unsupported` for solid operands, undecided joins, pending signs and pending nesting (NURBS waits on step 5's ray). `Want::Sheets` is not oriented. `BoxTree::overlapping_in` with a caller's `Overlaps` buffer (16% fewer allocations in the cut stage). Edges: stitch → mass, stitch → bodyq | Amends §4.3 steps 5 and 6 (no parity for sheets; `NotSolid` names one edge, not `NotClosed { open }`) | 74 §36 |
+
+## 37. HL2 as built (11-28)
+
+`Scene::hidden_lines(&self, &View, &mut Cx) -> Result<Drawing, HlrError>`, in
+`crates/scx-hlr/src/visibility.rs`, with the exact images in `crates/scx-hlr/src/project.rs`. Cargo:
+scx-planar moves from scx-hlr's `[dev-dependencies]` to `[dependencies]` (hlr → planar, as the
+74 §8 row says); no other edge.
+
+### 37.1 Public API
+
+- `Drawing { lines: Vec<DrawnLine>, unsupported: Vec<(usize, Unsupported)>, exhausted:
+  Option<Exhausted> }`: every drawn curve (body by body in scene order, each body's edges in id
+  order, then its silhouettes in face order); the faces whose silhouettes are not found; the budget's
+  exhaustion if it ran out while spans were classified.
+- `DrawnLine { body, source: Source, spans: Vec<Span> }`, spans in increasing parameter order,
+  adjacent spans of one visibility merged.
+- `Source::Edge(EdgeId)` (the edge's own curve and parameter) or `Source::Silhouette { face, curve:
+  SilhouetteCurve }` in the body's coordinates (a silhouette held by several faces of one surface is
+  drawn once, under the first).
+- `Span { t: Extent1d, visibility: Visibility }`.
+- `Visibility` (`#[non_exhaustive]`): `Visible`; `Hidden { body, face }` (the nearest face found
+  between the span and the eye); `Uncertain` (the budget ran out before the span was classified, and
+  only then); `Pending(Pending)`.
+- `Pending` (`#[non_exhaustive]`): `Curve` (no exact image: NURBS, parabola, hyperbola),
+  `TorusContour`, `Silhouette(Undecided)` (HL1's undecided part), `Crossing(CrossError)` (PL6 could
+  not settle a pair), `Piercing { body, face }` (through a NURBS face), `Occluder { body, face }` (a
+  ray against a NURBS face), `Outline { body, face }` (a face whose outline is not known exactly, and
+  whose image box may cross the span's), `Unplaced { body, face }` (no point tried could be placed in
+  or out of the face).
+- Phases `hlr.silhouettes`, `hlr.cuts`, `hlr.visibility`, with `Event::Progress` per round. Budget:
+  the silhouettes as `silhouettes`, each crossing and piercing search, and one unit per ray besides
+  what its intersection charges. Errors: `Stopped`; `Exhausted` only when the budget runs out before
+  the first span is classified (nothing decided yet); a surface or curve refusal; `BadPlacement`.
+
+### 37.2 Method
+
+1. **Every place a visibility can change is a cut.** A curve's visibility changes only where its
+   image crosses the image of an outline (a drawn edge or silhouette) or where it passes through a
+   face of another body. Images are exact: a line is a line, a circle an ellipse cut at its turning
+   points into conic arcs (rational quadratics, `project::pieces`), a circle seen edge on a segment
+   with an `acos` map. Pieces are paired by a sort and sweep over their image boxes (padded by the
+   zone), and each pair goes to `scx_planar::crossings`, which is complete. Through-face cuts are
+   `scx_surface::intersect_curve` of the curve, carried into the other body's frame, against each
+   face its box meets (`faces_meeting`), complete for analytic pairs. An extra cut changes nothing;
+   none is missed.
+2. **One classification per span.** Between cuts the visibility is constant, so one point of a span
+   decides it. Cuts closer than the zone (in space, not parameter) to the last kept cut or to the
+   range end are one place. A round takes each open span's next probe point (the midpoint, then a van
+   der Corput sequence, at most 63), builds a 2-D kd tree over their images, and takes each face in
+   turn against the points its image box holds and that lie behind its nearest depth. The ray is the
+   line from the point along `-d` over `(c, reach]`, where `c` is the coincidence: 2 zones plus the
+   curve's and face's recorded accuracies plus 8 roundings of the scene's size. A hit is a
+   `CurveSurfaceHit` whose uv is `Inside` or `Near` the face (closed faces). A face hides when the
+   ray meets it beyond `c`; the nearest is named. Only a point no face could place (`contains_uv`
+   unable to tell) goes on to a second round.
+3. **What cannot be decided is named.** `Uncertain` only on exhaustion; spans whose cuts or rays wait
+   on step 5 are `Pending` with the reason, decided before any ray is cast.
+
+Everything runs in a frame centred on the scene (`Lens`: the view carried into each body's frame
+once), so a part far from the origin draws as at the origin.
+
+### 37.3 Choices, with cases for and against
+
+- **Exact images and PL6, not sampled chords.** For: complete; no crossing between samples is missed;
+  no tolerance but the resolution. Against: a PL6 call costs 1-3 us against the pin's chord tests at
+  tens of ns, which is most of the time on scenes of many straight edges (37.6).
+- **Through-face cuts by `intersect_curve`.** For: a curve that enters another body (touching or
+  interpenetrating parts) changes visibility where it enters, which no image crossing shows. The pin
+  has no such cut and samples instead (`unexpected_transitions`). Against: one search per curve per
+  face whose box meets it; 54 on the rods scene, 0 where bodies are apart.
+- **One point per span, faces batched over a kd tree.** For: one ray per span and face in its box,
+  no per-span sampling, and one face's set-up serves every span behind it. Against: a point near an
+  occluder's boundary that `contains_uv` cannot place costs another round; capped at 63 points, then
+  `Pending::Unplaced`.
+- **Closed faces.** For: a curve exactly behind an occluder's edge, images coincident, is hidden.
+  This is deterministic and matches the slab oracle with touching counted as hiding. Against: an edge
+  grazed exactly by a ray past another body's edge reads hidden where a drafter might draw it seen;
+  only exact coincidence, never a near miss, is affected.
+- **Uncertain only on Exhausted (R6).** On exhaustion a span already hit is `Hidden`, naming a hiding
+  face that may not be the nearest; one not hit is `Uncertain`. For: a partial result that is never
+  wrong about seen or hidden. Against: the named face is not certified nearest on that path.
+- **Spans shorter than the zone merge with a neighbour.** For: no sub-resolution flicker at vertices
+  where several crossings land within rounding (touching boxes, far-origin parts). Against: a real
+  visibility change shorter than the zone is not drawn; at the model's resolution it is not a
+  distinct place.
+- **Edges seen end on are omitted.** Their image is a point (`NoImage::Point`). For: nothing to
+  draw. Against: a caller wanting a point mark gets nothing.
+- **Dedupe by identity, not image overlap** (04's HL1 row left this to HL2). A silhouette that HL1
+  reports on several faces of one surface is one equal `SilhouetteCurve`, drawn once under the first
+  face; an edge between two faces of one surface is not drawn. Curves of different bodies whose images
+  overlap are not merged: two touching boxes each draw their shared edge. For: identity is exact and
+  cheap, and both edges are the scene's. Against: a drawing has doubled strokes where parts touch; the
+  pin's `cover` merges them (37.7).
+- **Reflecting frames** (left to HL2 by the same row). Placements are `Frame`s, built from a z and an
+  x axis, so always right-handed: a reflection cannot be placed, and a mirrored part arrives as its
+  own mirrored body. Nothing in the visibility depends on handedness beyond the frame's own maps.
+- **NURBS faces as occluders** (the row's "NURBS-as-plane reporting"). A NURBS face that HL1 proves a
+  quadric draws that silhouette, but rays and piercings against it still go through the NURBS surface,
+  so a span its box may hide is `Pending::Occluder` or `Pending::Piercing` naming it. For: no guessed
+  hit. Against: a NURBS plane that hides nothing in fact still makes spans behind its box wait; using
+  SU7's recognized form for rays (with its deviation added to the coincidence) is the step-5 follow-up.
+- **Typed pending for NURBS, torus contours, parabolas and splines.** They wait on step 5's planar
+  widening and general plane-curve intersections; nothing about them is guessed.
+
+### 37.4 The pin, and which side is correct
+
+| solidcore at the pin (`hlr.rs`) | here | correct |
+|---|---|---|
+| `screen_samples`: each curve sampled to chords; `crossings` on chords over a grid, `1e-9 × scale` | exact images; `scx_planar::crossings` on lines and conic arcs | here: a crossing between samples is not missed |
+| `classify_range`/`classify_point`: rays per piece, plus sampling inside a piece for changes the crossings missed (`unexpected_transitions`) | one probe per span (more only when a face cannot place it) | here: a change is a cut by construction |
+| no through-face cut | `intersect_curve` cuts where a curve enters another body | here: the pin samples for it and may miss it |
+| `shadow_boxes`/`shadow_cuts`: freeform faces' screen boxes cut curves; behind a box is `uncertain` | `Pending::Outline` naming the face | here: typed, and `Uncertain` keeps one meaning |
+| `uncertain` pieces from many causes (box in front: 17 of 28) | `Uncertain` only on Exhausted (box in front: 0 of 18) | here |
+| `max_rays` budget; `Budget("ray")` refuses the whole call | `Budget` shared; partial `Drawing` with `exhausted` | here (R6) |
+| `cover`: coincident pieces drawn once | not ported | open (37.7) |
+| `scene_centre` shift | `Lens` centred frame | same intent |
+
+### 37.5 Tests (`crates/scx-hlr/tests/visibility.rs`, 16; `visibility.rs` unit, 2)
+
+Truth is closed form. Every span of every drawn curve is checked at 9 interior points against a slab
+test (box) or the quadratic (cylinder) in the bodies' frames, never against the pin. Ported from the
+pin's `hlr/tests.rs`: `iso_cube_hides_the_three_back_edges`, `a_box_in_front_hides_the_middle_of_an_edge`,
+`far_apart_bodies_keep_every_edge_of_the_near_one`, `a_plate_just_above_a_box_in_a_large_scene_is_not_looked_through`,
+`two_touching_boxes_draw_their_shared_edges_seen`, `a_cylinder_from_the_side_has_seen_rulings_and_half_hidden_rims`,
+`a_part_far_from_the_origin_draws_as_at_the_origin`, `a_stopped_call_and_a_small_budget_say_so`
+(the pin's cancellation and budget cases; a partial `Hidden` is compared by kind), and the cone front
+view in `a_cone_and_a_sphere_hide_a_box_behind_them`. New: stacked and occluding boxes in 6 view
+directions, a tilted placement checked in the box's own frame, a box behind a cylinder, a cylinder
+along its axis, the torus pending case, determinism (two calls, same bits), seams not drawn and a
+sphere drawing only its outline. Unit: the kd tree returns exactly the points in 300 random boxes
+over 2,000 points; probes spread and never repeat. The remaining pin cases are HL3's. No test removed.
+
+### 37.6 Cost
+
+Release, one thread, the build machine under other load (small scenes vary 2x between runs; ranges
+over three runs). Throwaway counters and timers, not committed. Pin: `hidden_lines` with `Serial`
+and `threads: 1`, its own `Stats`. Here: `hidden_lines` only; `prepare` (51-166 us) is timed apart,
+as the pin prepares outside its call. Rays here are ray-face tests, comparable to the pin's surface
+tests, not its rays per piece.
+
+| scene | pin median | here median | pin rays / surface tests | here ray-face tests | pin crossings | here PL6 pairs / meets | pin uncertain | here not decided |
+|---|---|---|---|---|---|---|---|---|
+| iso cube | 21 us | 160-387 us | 60 / 120 | 33 | 36 | 37 / 30 | 0 of 12 | 0 of 12 |
+| box in front | 75 us | 113-518 us | 160 / 250 | 64 | 72 | 48 / 40 | 17 of 28 | 0 of 18 |
+| cylinder side, r 10, h 30 | 4,591 us | 51 us | 40 / 60 | 16 | 10 | 8 / 10 | 0 | 0 |
+| 48 boxes, 4x4x3 | 3,789 us | 16,288-16,531 us | 13,300 / 33,425 | 13,662 | 2,439 | 3,683 / 2,282 | 0 | 0 |
+| 9 rods on a plate | 22,561 us | 2,040-2,174 us | 1,405 / 2,440 | 1,048 (54 piercings) | 168 | 257 / 134 | 0 | 0 |
+
+Curved scenes are 10-90x faster (the pin samples conics finely; here they are exact arcs). Scenes of
+many straight edges are 1.5-4x slower. On the grid, 9.7 ms of 16.5 is PL6 (2.6 us per pair) and 4.4
+ms rays (0.32 us per face test); silhouettes 0.07 ms. About 1,150 of the 3,683 pairs are two edges
+of one box sharing a vertex, whose only meet is that vertex. Two follow-ups would close most of the
+gap, not done here: a line-line fast path in `scx_planar::crossings` (two exact orientations decide
+it without the general isolator; 74 §31.6 already proposes a root polish), and skipping a same-body
+pair of non-collinear lines that share an exact end.
+
+### 37.7 Deviations and open questions
+
+- Coincident drawn lines of different bodies are not merged (the pin's `cover`); open: merge by image
+  overlap within the zone, keeping both sources, or leave it to the drawing's consumer.
+- NURBS faces recognized as quadrics still make rays wait (37.3); open until step 5 or SU7 forms.
+- A span behind several faces of one surface split into faces names one of them; a span hidden on
+  the exhausted path names a hiding face, not certified nearest.
+- Sub-zone spans merge into a neighbour; edges seen end on are not drawn.
+- The closed-face convention decides exact coincidence as hidden; a caller wanting the opposite needs
+  an option, not added.
+- NURBS faces and edges, torus contours, parabolas, hyperbolas and splines are typed `Pending` until
+  step 5.
+- Straight-edge scenes are slower than the pin (37.6); the PL6 line fast path is the first follow-up.
+
+### 37.8 Proposed 04 row
+
+HL2 (74 §37): `Scene::hidden_lines` cuts every edge and silhouette where its exact image meets
+another's (`scx_planar::crossings`) and where it enters another body (`intersect_curve`), then
+classifies each span by one ray per face whose image box holds its probe (faces in turn over a kd
+tree); `Uncertain` only on Exhausted, NURBS, torus contours and curves with no exact image typed
+`Pending`; closed faces; hlr → planar. The pin's chord sampling, in-piece sampling, shadow-box
+uncertainty and `cover` are not ported. Curved scenes 10-90x faster, straight-edge grids 1.5-4x
+slower (PL6 per pair).
+
 ## 38. SP2b as built (11-28)
 
 `scx-step` states a face's surface as the quadric it is when the file writes it as something

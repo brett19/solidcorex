@@ -1,0 +1,17 @@
+# Written for solidcorex. Apache-2.0.
+# cargo-nextest, the test runner of `cargo xtask fast`, `tests` and `diff` (docs/02-testing.md §8).
+# Every test runs in its own process; no test shares a file, an environment variable or a
+# working directory with another, so no test group is needed.
+
+[profile.default]
+# Run every test, as `cargo xtask` always has, so one run names every failure.
+fail-fast = false
+# Name a test still running after 30 s (it is never killed), and list the slow ones at the end.
+slow-timeout = { period = "30s" }
+final-status-level = "slow"
+
+# Start the longest tests first, so no long test begins near the end and sets the wall time
+# alone (each is one long loop on one core).
+[[profile.default.overrides]]
+filter = 'test(=valid_and_loose_bodies_are_clean) | test(=widths_fall_to_the_floor)'
+priority = 100

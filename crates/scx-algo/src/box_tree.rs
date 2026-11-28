@@ -11,8 +11,9 @@
 //! hold them; they are tested one by one on every query. Inside-out (empty) boxes are
 //! placed, and add nothing to a union.
 //!
-//! The answer is a sorted `Vec` of item indices. It does not depend on the tree's shape,
-//! and the shape depends only on the boxes and their order. The build splits each node at
+//! The answer is a sorted `Vec` of item indices, or for [`BoxTree::overlapping_in`] a
+//! sorted slice held in a caller's [`Overlaps`], reused across queries. It does not depend
+//! on the tree's shape, and the shape depends only on the boxes and their order. The build splits each node at
 //! the median of its items' centres, on the axis where the centres spread most, with ties
 //! broken by item index. The median is found by selection, not a full sort: the key is a
 //! strict total order, so the halves hold the same items either way. A half that becomes a
@@ -274,6 +275,26 @@ impl Keys {
     }
 }
 
+/// The working space of repeated [`BoxTree::overlapping_in`] queries: the walk's stack and
+/// the answer, kept between queries. It holds no state a query reads: each query clears
+/// it first, so any space gives the same answer.
+#[derive(Debug, Clone, Default)]
+pub struct Overlaps {
+    stack: Vec<usize>,
+    found: Vec<usize>,
+}
+
+impl Overlaps {
+    /// An empty space; its buffers grow on the first queries.
+    #[must_use]
+    pub const fn new() -> Self {
+        Self {
+            stack: Vec::new(),
+            found: Vec::new(),
+        }
+    }
+}
+
 impl<B: Bounds> BoxTree<B> {
     /// The tree over `boxes`; item `i` is `boxes[i]`.
     #[must_use]
@@ -437,12 +458,27 @@ impl<B: Bounds> BoxTree<B> {
     /// The items whose box is not disjoint from `q` within `tol`, ascending.
     #[must_use]
     pub fn overlapping(&self, q: &B, tol: f64) -> Vec<usize> {
-        let mut out = Vec::new();
-        let mut stack: Vec<usize> = if self.nodes.is_empty() {
-            Vec::new()
-        } else {
-            vec![0]
-        };
+        let mut space = Overlaps::new();
+        self.walk(q, tol, &mut space);
+        space.found
+    }
+
+    /// [`overlapping`](Self::overlapping), its answer held in `space`, whose buffers are
+    /// kept from one query to the next: a loop of queries allocates only when an answer or
+    /// the walk outgrows every earlier one. The answer is the same as `overlapping`'s.
+    pub fn overlapping_in<'s>(&self, q: &B, tol: f64, space: &'s mut Overlaps) -> &'s [usize] {
+        self.walk(q, tol, space);
+        &space.found
+    }
+
+    /// The query: `space.found` cleared and filled with the answer, ascending.
+    fn walk(&self, q: &B, tol: f64, space: &mut Overlaps) {
+        let Overlaps { stack, found } = space;
+        stack.clear();
+        found.clear();
+        if !self.nodes.is_empty() {
+            stack.push(0);
+        }
         while let Some(k) = stack.pop() {
             let Some(n) = self.nodes.get(k) else {
                 continue;
@@ -455,12 +491,11 @@ impl<B: Bounds> BoxTree<B> {
                     stack.push(b);
                     stack.push(a);
                 }
-                None => out.extend(self.items(n).iter().filter(|&&i| self.meets(i, q, tol))),
+                None => found.extend(self.items(n).iter().filter(|&&i| self.meets(i, q, tol))),
             }
         }
-        out.extend(self.unplaced.iter().filter(|&&i| self.meets(i, q, tol)));
-        out.sort_unstable();
-        out
+        found.extend(self.unplaced.iter().filter(|&&i| self.meets(i, q, tol)));
+        found.sort_unstable();
     }
 
     /// The pairs `(i, j)` of an item of `self` and an item of `other` whose boxes are not
@@ -810,6 +845,9 @@ mod tests {
     #[test]
     fn queries_match_brute_force() {
         let mut rng = Rng::new(Rng::DEFAULT_SEED);
+        // One space for every query of every tree: what one query leaves in it cannot
+        // change the next one's answer.
+        let mut space = Overlaps::new();
         for n in [0, 1, 3, 4, 5, 17, 200] {
             let mut boxes = random_boxes(&mut rng, n);
             if n > 3 {
@@ -824,9 +862,11 @@ mod tests {
             let queries = random_boxes(&mut rng, 50);
             for tol in [0.0, 0.5, -0.1, f64::NAN] {
                 for q in &queries {
+                    let want = brute(&boxes, q, tol);
+                    assert_eq!(tree.overlapping(q, tol), want, "n {n} tol {tol}");
                     assert_eq!(
-                        tree.overlapping(q, tol),
-                        brute(&boxes, q, tol),
+                        tree.overlapping_in(q, tol, &mut space),
+                        want.as_slice(),
                         "n {n} tol {tol}"
                     );
                 }

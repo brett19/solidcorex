@@ -20,6 +20,13 @@
 //! the surface's lower bound past `re`. What neither decides is [`Undecided::EdgeOffFace`]:
 //! no trim-restricted gap is built (74 §28 argues why the check does not need one).
 //!
+//! **A recorded certificate** (04 SP2, 74 §35): under [`Scope::Import`] and
+//! [`Scope::Stitched`], a gap the body records with a [`Cert`](scx_num::cert::Cert) of the question's claim whose
+//! bound is within the question's allowance is taken as decided, not proved again: a use's
+//! [`Claim::PcurveOnSurface`] answers the use (and the face, within `re`), an edge's
+//! [`Claim::CurveToIntersection`] answers its faces. Any other basis, another claim or a
+//! bound past the allowance is proved as before. [`Scope::Full`] proves everything.
+//!
 //! **Budget** (74 R6): each edge in id order gets an equal share of what is left; what it
 //! does not spend passes on. An edge whose share runs out lists what it reached.
 
@@ -29,7 +36,7 @@ use std::collections::BinaryHeap;
 use scx_brep::{Brep, Edge, EdgeShape, Entity, FaceId, Fin, Use, UseGeom};
 use scx_curve::{Curve, Curve2};
 use scx_num::budget::{Budget, Stop};
-use scx_num::cert::Recorded;
+use scx_num::cert::{Basis, Claim, Recorded};
 use scx_num::consts::MAX_ACCURACY_RATIO;
 use scx_num::extent1d::Extent1d;
 use scx_num::extent2d::Extent2d;
@@ -84,7 +91,7 @@ pub(crate) fn run(
         stop.check().map_err(|_| CheckError::Cancelled)?;
         let share = budget.remaining() / (n - i) as u64;
         let mut sub = Budget::new(share);
-        edge_gaps(edge, res, &mut sub, stop, &mut out)?;
+        edge_gaps(edge, res, scope, &mut sub, stop, &mut out)?;
         // A share is at most what is left, so this charge fits.
         let _ = budget.charge(sub.used().min(share));
     }
@@ -168,6 +175,26 @@ fn verdict(r: Result<Bracket, GapError>, allowed: f64) -> Result<Verdict, CheckE
     }
 }
 
+/// The bracket `[0, bound]` of a recorded certificate of `claim` whose bound is within
+/// `allowed`, where `scope` takes one as decided; `None` when the question must be proved.
+fn certified(
+    recorded: Option<&Recorded>,
+    claim: Claim,
+    allowed: f64,
+    scope: Scope,
+) -> Option<Bracket> {
+    if !matches!(scope, Scope::Import | Scope::Stitched) {
+        return None;
+    }
+    let Basis::Certified(cert) = recorded?.basis else {
+        return None;
+    };
+    let bound = cert.bound.mm();
+    (cert.claim == claim && bound <= allowed)
+        .then(|| Bracket::new(0.0, bound))
+        .flatten()
+}
+
 const fn decide(allowance: f64) -> Aim {
     Aim::Decide {
         allowance,
@@ -178,6 +205,7 @@ const fn decide(allowance: f64) -> Aim {
 fn edge_gaps(
     edge: Edge<'_>,
     res: Resolution,
+    scope: Scope,
     budget: &mut Budget,
     stop: &Stop,
     out: &mut Found,
@@ -237,7 +265,10 @@ fn edge_gaps(
     for u in edge.uses() {
         let surface = u.face().surface();
         let rb = reach(u.bound(), res);
-        let p = use_gap(surface, u, curve, interval, rb, re, budget, stop)?;
+        let p = match certified(u.bound(), Claim::PcurveOnSurface, rb, scope) {
+            Some(b) => Verdict::Clean(b),
+            None => use_gap(surface, u, curve, interval, rb, re, budget, stop)?,
+        };
         use_verdict(id, u.fin(), rb, p, out);
         let face = u.face().id();
         let best = p.upper();
@@ -246,8 +277,9 @@ fn edge_gaps(
             None => faces.push((face, best)),
         }
     }
+    let by_record = certified(edge.accuracy(), Claim::CurveToIntersection, re, scope).is_some();
     for (face, through_use) in faces {
-        if through_use.is_some_and(|b| b <= re) {
+        if by_record || through_use.is_some_and(|b| b <= re) {
             continue;
         }
         let Some(surface) = edge
