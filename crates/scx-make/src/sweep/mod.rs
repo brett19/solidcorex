@@ -602,7 +602,7 @@ pub fn sweep(
     doc: &Document,
 ) -> Result<Made<SweepFaces>, MakeError> {
     if *frame == PathFrame::Shaped(Shape::PLAIN) {
-        return walls::build(profile, plane, path, doc);
+        return walls::build(profile, plane, path, *doc);
     }
     if profile.resolution() != doc.resolution() {
         return Err(MakeError::Refused(Refusal::Resolution {

@@ -89,10 +89,10 @@ pub(crate) fn build(
     profile: &Region,
     frame: &Frame,
     path: &Path,
-    doc: &Document,
+    doc: Document,
 ) -> Result<Made<SweepFaces>, MakeError> {
-    let plan = Plan::new(profile, frame, path, *doc)?;
-    let mut build = Build::new(&plan, Assembly::new(doc)?);
+    let plan = Plan::new(profile, frame, path, doc)?;
+    let mut build = Build::new(&plan, Assembly::new(&doc)?);
     let walls = build.walls()?;
     let (start, end) = if plan.closed {
         (None, None)
