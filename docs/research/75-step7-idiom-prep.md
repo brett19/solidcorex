@@ -3967,3 +3967,30 @@ Open questions:
 - **A NURBS curve against a NURBS surface.** This is deferred, as 77 §6.3 says.
 - **Degree-4p spans of high-degree curves.** These have not been measured for root-isolation
   depth. `RootLimits::DEFAULT` is used.
+
+### 13.46 MK17 as built (11-28)
+
+`scx_make::{ruled, RuledSide, Join, Which, RuledError, RuledRefusal, RuledUnsupported}` in `crates/scx-make/src/ruled/` (`mod.rs`, `planar.rs`, `nurbs.rs`, `tests.rs`), and `Draft::reverse_sheet(&Document) -> Result<(), ReverseError>` in `crates/scx-brep/src/draft/reverse.rs` (the pin's `reverse_sheet`). scx-brep gains the dependency `scx-nurbs-surface` (for `ParamAxis`; layers.txt allows it) and `transform.rs` makes `use_image` and `EdgeImage` `pub(super)` so the two edits share one pcurve mapping.
+
+API:
+- `ruled(a: &RuledSide, b: &RuledSide, join: Join, doc) -> Result<Made<FaceId>, RuledError>`. A `RuledSide` is a `Curve` and an `Extent1d`. `Join::{Same, Reversed}` replaces the pin's `reversed: bool`; reversed is the pin's meaning (b's end is joined to a's start).
+- Errors: `Refused(Interval | Closed | NoArea)`, `Unsupported(Form | MeetingSides)`, `Compatible(NurbsError)`, `Surface`, `Make`, `Defect`. Each has `kind()` and `name()`.
+- `Draft::reverse_sheet`: errors `NotSheet { face }`, `NonManifold { edge }` and `Pcurve(TransformError)`.
+
+Decisions.
+- **Exact by kind is a predicate made before building.** Both sides lines or circle arcs, every sampled point and each arc's plane within the resolution of one plane (Newell normal of the sampled ring): the face is on that `Plane`, bounded by the region of the two sides and two rulings (`Region::new` and `sheet`). Anything else is the NURBS surface.
+  - For: parallel lines are a plane (closed-form area), coplanar arcs are an annular sector or a quarter disc, with analytic edges and no net. Against: the plane's uv is its own, not the ruled map's `(s, t)`; a caller who evaluates by `(s, t)` must use the NURBS case. The plane face is the same point set only when the four sides bound a simple region.
+  - If `Region::new` refuses (crossing rulings, a bow tie, overlapping sides) the case falls through to the NURBS surface instead of refusing, because the ruled surface exists there.
+- **The NURBS case reuses MK12b's exact forms** (a line's degree 1, a circle's rational quadratic pieces of at most a quarter turn, a NURBS curve restricted). The function is copied, not shared, to keep to my own module. Ellipses, parabolas and hyperbolas are `Unsupported(Form)` (their forms are not written here).
+  - The two forms are made compatible by `CompatibleCurves::from_curves` (degree elevation, then the knot union, exact, no knot moved). The net is the two sections as two columns, degree 1 in `t`; the four edges are the surface's own iso curves with the parameter square's line pcurves (the writer `exact_loops` has none on a NURBS surface), as in `sheet_blend`.
+  - The pairing is by the compatible forms' parameter. For lines it is the fraction of each range (the pin's `s`). For a circle against another curve it agrees with the angle only at the quarter-turn knots.
+  - Where the two sides' weights differ, the homogeneous lerp moves points along their rulings: rulings and both sides are exact, `t` is not linear along them. The test checks the middle lies on the ruling, not at the lerp.
+- **Closed sides and meeting sides are refused, not guessed.** A side whose ends are within the resolution is `Closed` (a cylinder or cone has its own constructor). On the NURBS case, sides meeting at an end make a collapsed edge on a NURBS face, which is not written (`MeetingSides`). Lines and arcs in one plane skip a degenerate ruling and so do not hit it.
+- **`reverse_sheet` flips the normal and runs the loops the other way.** Each surface is `Surface::reversed(V)` (`S'(u, -v) = S(u, v)`, exact for every kind), the pcurves follow its `UvMap` through the transform's mapping, and each loop's uses are taken in reverse order with senses flipped, so the outer loop stays counter-clockwise about the new front. Edges, vertices, shells and sides are untouched. The pin swaps u and v; `reversed(V)` is exact and exists for the analytic kinds too, but it moves a NURBS face's `v` domain to `[-1, 0]`.
+  - A face of a solid (sides in two shells, or a solid region) is `NotSheet`: with its sides kept the solid would be inside out. An edge of more than two fins is `NonManifold`: its radial order depends on the geometry, which this edit does not rewrite.
+  - Against: a non-manifold sheet cannot be turned over whole yet (open: rewrite the order, or reverse per component).
+  - The pin's second return value, the map of edge indices, is not needed: edges keep their ids.
+
+Tests (13 in `scx-make`, all passing): `two_parallel_lines_are_a_plane_strip` (area `l w`, both joins), `a_trapezoid_between_unequal_parallel_lines` (area `(10 + 6) 5 / 2`), `coplanar_arcs_are_an_annular_sector` (`theta (R^2 - r^2) / 2`, sweeps 1.2 and 4), `a_line_and_an_arc_in_one_plane_are_a_planar_face` (a quarter disc, `pi r^2 / 4`), `a_ruled_surface_has_its_two_curves_as_sides` (the pin's test: a at `t = 0`, b at `t = 1`, straight between, both joins, to 1e-9), `two_skew_lines_are_a_bilinear_patch` (`S = (s, t, s t)` to 1e-12), `an_arc_and_a_line_out_of_its_plane`, `crossing_rulings_are_a_nurbs_patch`, `refusals_name_the_input`, `an_ellipse_side_is_unsupported`, `a_reversed_sheet_has_the_other_normal_and_reversing_twice_gives_it_back` (plane strip and NURBS: same points, normal dot -1, same edges with reversed order and senses, twice is the original surface and loops), `a_cylinder_face_reverses_and_comes_back`, `a_solid_is_not_a_sheet`. The pin's `ruled` test that asserted outcome is ported; its `Error::Argument` for a circle against a line is not (a circle is now a side; a full circle is `Closed`). The pin's `sheet_reverse.rs` tests on the record (edge map, record round trip, used-backward faces) are of the record layer, not ported.
+
+Open: ruled on sides that meet off a plane (collapsed edge on a NURBS face); a ruled surface by `(s, t)` on the planar case; ellipse sides (an exact rational form).
