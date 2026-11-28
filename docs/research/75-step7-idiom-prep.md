@@ -1381,3 +1381,30 @@ Decisions. Fresh draft against `a.edit()` with everything removed: for, the resu
 Truths (tests/intersect.rs, 12 tests): disjoint cubes, no shells; overlapping cubes, six lines of 0.5 and six vertices; cylinder through a plate, two circles of 2 pi in two shells; cylinder on a block side, arcs pi, pi and rulings 1, 1 in one shell; cylinder with a square plane, a unit circle; a tilted plate, two ellipses of semi-axes 1 and sqrt 2 (perimeter by quadrature); two unit spheres, circle of length sqrt 3 pi (two arcs); plane through a sphere's centre, 2 pi; tangent plane, one lone vertex at the closed-form point; plane through a torus's mid plane, 20 pi (the inner and outer circles of R = 5, r = 1.5); operand swap and repeat agree; shared cube face, four unit edges once each. The solid `contract` does not apply to a wire body; `finish` checks it.
 
 Open: no pin test of `intersect_faces_read_only` (9) was ported (it needs the pin's face-level API); the NURBS and general-SSI pairs stay `Unsupported(SsiPair)` as in `boolean` (BO22/BO23).
+
+### 13.3 BO13 imprint as built (11-28)
+
+`scx_boolean::imprint(target, tool, what, cx)` (`imprint_op.rs`) runs stages 1 to 5 and
+finishes the draft with no selection. Choices 75 left open:
+
+- **The result is the target's part of the stage-5 draft.** Stage 5 writes both operands whole;
+  the entry removes the tool's faces, then the edges, vertices, shells and regions only they
+  held, and finishes. `Done.changes` is then the target's own edit (split faces with their
+  pieces, cut edges, new vertices, section edges whose origins include the tool's faces as
+  operand 1); the pin's `(Body, bool)` is `!changes.is_empty()`. For: the target keeps its
+  material and sense, so volume and area are the target's; nothing needs classifying. Against: a
+  caller wanting the tool's faces cut as well must swap the operands and call again.
+- **`Imprint::Edges` or `Imprint::EdgesAndFaces`.** Both write every transversal section and cut
+  the target's edges at the merged points. `EdgesAndFaces` also writes the tool's edges lying in
+  the target's faces (stage 4's `lying` with no `along`), which is what splits a target face a
+  tool face rests on into the part under it and the rest; `Edges` drops those. For the split: a
+  block standing on a face is then imprinted or not at the caller's choice (tests: 7 faces
+  against 6 with no changes). Against: the pin has one Imprint mode; BO12 may find the choice
+  unnecessary once cells replace pieces, and the variant can then go.
+- **No new counters, no new stage code.** The entry filters stage 4's list and reuses stage 5;
+  the cleanup repeats the draft cleanup the stage-5 tests used.
+
+Truth tests (`tests/imprint.rs`, closed forms): offset cubes give 9 faces, 21 edges, 14 vertices,
+areas 3 x 1/4 + 3 x 3/4 + 3 x 1; a thin cylinder through a cube gives 8 faces, 14 edges, 10
+vertices, two disks of pi/16 and two faces of 1 - pi/16; a block on a face, a block apart,
+determinism and operand swap, and a refusal of another document. Volume is 1 throughout.
