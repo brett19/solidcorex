@@ -24,6 +24,9 @@
 //! - [`intersect_curve`]: where a line, circle or ellipse meets a kind, every point in
 //!   the curve's `t` and the kind's uv, crossing or tangent at the tolerance, or the curve
 //!   lying on it ([`CurveSurfaceHit`]); closed forms, a NURBS pair `Unsupported` (63 SU6).
+//! - [`project_curve`] and [`drop_curve`]: a curve projected onto a kind along a direction,
+//!   or dropped onto it square to it, in closed form, or a typed refusal naming the fitter
+//!   ([`ProjectError::NeedsFitter`]) (research 75 SF1).
 //! - [`pcurve_of`]: the exact pcurve of a curve lying on a surface, checked by lifting, or a
 //!   typed [`PcurveError`] (63 D10, §4.11).
 //! - [`AnyCurve`]: a free [`Curve`](scx_curve::Curve), or a [`CurveOnSurface`] (a uv curve on
@@ -70,6 +73,7 @@ mod meet;
 mod nurbs_invert;
 mod pcurve;
 mod plane;
+mod project;
 mod recognize;
 mod sphere;
 mod surface;
@@ -95,6 +99,7 @@ pub use invert::{Closest, Foot, Inversion};
 pub use meet::{Meet, MeetError, points_meet};
 pub use pcurve::{Check, CurveKind, PcurveError, SurfaceKind, pcurve_of};
 pub use plane::Plane;
+pub use project::{ProjectError, Projected, drop_curve, project_curve};
 pub use recognize::{Recognized, Written, recognize, recognize_written};
 pub use sphere::Sphere;
 pub use surface::Surface;
@@ -132,6 +137,8 @@ const _: () = {
     ok::<UvMap>();
     ok::<SurfaceError>();
     ok::<Size>();
+    ok::<Projected>();
+    ok::<ProjectError>();
     ok::<scx_num::jet::SurfaceJet<scx_num::vector3d::Vec3, 2>>();
 };
 
