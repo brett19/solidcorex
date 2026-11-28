@@ -1365,6 +1365,12 @@ should be run once through `SCX_HEAL_STEP_DIR` before the row is closed, and a Q
 needs a class of failing records with a count. Against porting, in numbers: 15 regressions,
 0 fixes.
 
+NIST run (coordinator, 11-28): the 33 NIST MBE PMI STEP files (public domain; fetched by the pin's
+pinned-hash script) through the same harness (`SCX_HEAL_STEP_DIR`). 33 records: none refused; 2 fail
+the check before the healer (Bad Knot Count, Bad Repeated CPts) and both still fail after it; the
+healer alters 32 (31 tolerances only, 1 geometry or trims) and turns no valid record invalid. Over
+all three sets the healer fixes 0 of 3 failing records, so Q7 is ruled: not ported.
+
 ### 13.2 BO18 as built (11-28)
 
 `scx_boolean::intersect(a, b, cx) -> Result<Done<NoItems>, BooleanError>` runs stages 1-4 of `boolean` (`interfere`, `face_face`) and stops; `crates/scx-boolean/src/intersect.rs`. The result is a `Draft::new()` body of no faces:
@@ -1382,7 +1388,85 @@ Truths (tests/intersect.rs, 12 tests): disjoint cubes, no shells; overlapping cu
 
 Open: no pin test of `intersect_faces_read_only` (9) was ported (it needs the pin's face-level API); the NURBS and general-SSI pairs stay `Unsupported(SsiPair)` as in `boolean` (BO22/BO23).
 
-### 13.3 MK13 as built (11-28)
+### 13.3 BO13 imprint as built (11-28)
+
+`scx_boolean::imprint(target, tool, what, cx)` (`imprint_op.rs`) runs stages 1 to 5 and
+finishes the draft with no selection. Choices 75 left open:
+
+- **The result is the target's part of the stage-5 draft.** Stage 5 writes both operands whole;
+  the entry removes the tool's faces, then the edges, vertices, shells and regions only they
+  held, and finishes. `Done.changes` is then the target's own edit (split faces with their
+  pieces, cut edges, new vertices, section edges whose origins include the tool's faces as
+  operand 1); the pin's `(Body, bool)` is `!changes.is_empty()`. For: the target keeps its
+  material and sense, so volume and area are the target's; nothing needs classifying. Against: a
+  caller wanting the tool's faces cut as well must swap the operands and call again.
+- **`Imprint::Edges` or `Imprint::EdgesAndFaces`.** Both write every transversal section and cut
+  the target's edges at the merged points. `EdgesAndFaces` also writes the tool's edges lying in
+  the target's faces (stage 4's `lying` with no `along`), which is what splits a target face a
+  tool face rests on into the part under it and the rest; `Edges` drops those. For the split: a
+  block standing on a face is then imprinted or not at the caller's choice (tests: 7 faces
+  against 6 with no changes). Against: the pin has one Imprint mode; BO12 may find the choice
+  unnecessary once cells replace pieces, and the variant can then go.
+- **No new counters, no new stage code.** The entry filters stage 4's list and reuses stage 5;
+  the cleanup repeats the draft cleanup the stage-5 tests used.
+
+Truth tests (`tests/imprint.rs`, closed forms): offset cubes give 9 faces, 21 edges, 14 vertices,
+areas 3 x 1/4 + 3 x 3/4 + 3 x 1; a thin cylinder through a cube gives 8 faces, 14 edges, 10
+vertices, two disks of pi/16 and two faces of 1 - pi/16; a block on a face, a block apart,
+determinism and operand swap, and a refusal of another document. Volume is 1 throughout.
+
+### 13.4 MK14 as built (11-28)
+
+`scx_make::prism(&[Region], &Frame, Span, &Document) -> Made<PrismFaces>` and
+`scx_make::sheet(&[Region], &Frame, &Document) -> Made<SheetFaces>`. `PrismFaces { solids:
+Vec<ExtrudeFaces> }` is one record per region, in the order given; `SheetFaces { faces: Vec<FaceId> }`
+one face per region. The solids are written by the same code as `extrude` (which now calls
+`extrude_into`), so each is exactly what `extrude` makes of its region.
+
+Decisions, with cases for and against:
+
+- **One solid per region, in one body; not a union.** Each region has its own solid region and
+  shell, and its own shell in the outside region. For: the pin joins separate extrusions by
+  `union_all`, and the regions are apart (below), so the union is the same solids with no
+  Boolean. Against: the pin's body is one `union_all` result whose solids could be re-ordered;
+  ours are in input order, which is what a caller wants to index by. The outside needs a shell
+  per solid because `finish` refuses a disconnected shell (`ShellNotConnected`).
+- **Regions that overlap, touch or cross are refused, `Unsupported::RegionsMeet { first, second }`,
+  not merged.** The pin first unites the regions in the plane (overlap normalised, volume 300
+  for two overlapping 10 x 10 squares) and refuses pieces of the union that touch. No planar
+  Boolean exists until BO17, so the merge cannot be done; a refusal is the honest answer and is
+  `Unsupported`, not `Refused`, since the input is valid. For: nothing is guessed, and BO17 can
+  add the merge as a wider entry later without changing this one. Against: a caller with
+  overlapping profiles must unite them first. A region in another's hole, or beside it, is kept
+  (the pin's islands).
+- **Meeting is decided by `Region::new` on a probe, not by new geometry.** For `a` and `b`, the
+  probe is `a`'s outer loop with every other loop of both as holes; its contact check (every
+  pair of segments within the resolution, crossing before touching, between loops too) names a
+  crossing or touch before nesting, so those two errors mean the boundaries meet. If the
+  boundaries are apart, one start point of each region is classified against the other
+  (`Region::classify`): inside or on the boundary means one lies in the other's material. For:
+  no new predicate in `scx-planar`, exact and certified as `Region::new` is, a hole-in-hole
+  island handled by classification. Against: it builds a throwaway region per pair, so the check
+  is O(k^2) probes for k regions and each probe is linear in the segments of both.
+  Measured (release, throwaway timers, whole circles on a grid, one probe per pair): `prism` of 4, 16, 64
+  and 256 regions takes 0.13, 0.44, 3.6 and 28 ms against 0.09, 0.30, 1.2 and 2.6 ms for the same
+  regions extruded one by one; the sheet's 0.03, 0.20, 1.9 and 27 ms is nearly all the check. So the check
+  added is quadratic, small to about 64 regions and dominant at 256; a bounding-box prune of pairs is the
+  fix if a caller passes hundreds of regions (not done: no such caller yet).
+  A pair's one start point decides nesting only because the boundaries are apart (a region is
+  wholly inside or wholly outside another's material).
+- **A sheet's face has both sides in one shell**, a shell per face (the `scx-brep` sheet form);
+  its front is the frame's +z side and the outer loop runs counter-clockwise about it, so
+  `scx_mass` gives the regions' area and no volume. The sheet is `z = 0` of the frame; there is
+  no height argument (a sheet's place is its frame's).
+- **`Assembly` gained `sheets`, `begin_solid` and `sheet_face`**, and the outside shell and solid
+  shell are `Option`s (a sheet has neither): `face` on a sheet is `Defect::NoSolid`. `error.rs`
+  gained `Refusal::NoRegions`, `Unsupported::RegionsMeet` and `Defect::NoSolid`.
+
+Tests (`crates/scx-make/tests/prism.rs`, 11): see the file's header for the pin tests removed on
+purpose and why.
+
+### 13.5 MK13 as built (11-28)
 
 `scx_make::radial(&RadialCone, &Document) -> Result<Made<RadialFaces>, MakeError>` builds the hollow cone in one `Draft`: outer wall, inner wall and an annular cap at each end that is not a hinge, with no stitch, no outward check and no subtract. `RadialCone { frame, height, outer: [Length; 2], inner: [Length; 2] }` gives radii at `z = 0` and `z = height`; `RadialFaces { outer, inner, bottom: Option, top: Option }`. Counts: both ends capped 4 faces, 6 edges, 4 vertices; one hinge 3, 5, 3 (the walls share the rim and its vertex). Walls are cylinders when their radii are equal, cones otherwise; the inner wall is the same surface with `Sense::Reversed` and a loop run the other way round, so its front is the hollow.
 
