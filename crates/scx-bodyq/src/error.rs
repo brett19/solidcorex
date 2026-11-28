@@ -47,6 +47,15 @@ pub enum BodyqRefusal {
     },
     /// A body with no face, edge or vertex to box.
     EmptyBody,
+    /// A frame so far from the body that its coordinates carry less than the body's
+    /// coincidence: the section would be read at a precision it does not have
+    /// (`prism_section`).
+    FrameTooFar,
+    /// A request option that is not a finite length above zero (`hole_stacks`).
+    BadOption {
+        /// Which option.
+        name: &'static str,
+    },
 }
 
 /// What this method does not answer yet.
@@ -119,6 +128,9 @@ pub enum BodyqDefect {
         /// The shell.
         shell: ShellId,
     },
+    /// A coincidence or accuracy that is not a finite length: a body whose recorded
+    /// accuracy is not valid.
+    Tolerance,
 }
 
 impl BodyqError {
@@ -142,6 +154,8 @@ impl BodyqError {
             Self::Refused(BodyqRefusal::NoShell { .. }) => "no_shell",
             Self::Refused(BodyqRefusal::NoEntity { .. }) => "no_entity",
             Self::Refused(BodyqRefusal::EmptyBody) => "empty_body",
+            Self::Refused(BodyqRefusal::FrameTooFar) => "frame_too_far",
+            Self::Refused(BodyqRefusal::BadOption { .. }) => "bad_option",
             Self::Unsupported(BodyqUnsupported::Nurbs { .. }) => "nurbs",
             Self::Unsupported(BodyqUnsupported::NonManifold { .. }) => "non_manifold",
             Self::Unsupported(BodyqUnsupported::NoClearSide { .. }) => "no_clear_side",
@@ -155,6 +169,7 @@ impl BodyqError {
             Self::Defect(BodyqDefect::NoBoundary) => "no_boundary",
             Self::Defect(BodyqDefect::NoEdgeBox { .. }) => "no_edge_box",
             Self::Defect(BodyqDefect::Betti { .. }) => "betti",
+            Self::Defect(BodyqDefect::Tolerance) => "tolerance",
         }
     }
 
@@ -197,6 +212,12 @@ impl fmt::Display for BodyqError {
                 write!(f, "{entity}: no such entity")
             }
             Self::Refused(BodyqRefusal::EmptyBody) => f.write_str("the body has nothing to box"),
+            Self::Refused(BodyqRefusal::FrameTooFar) => {
+                f.write_str("the frame is too far from the body for its coordinates to hold")
+            }
+            Self::Refused(BodyqRefusal::BadOption { name }) => {
+                write!(f, "the option `{name}` is not a finite length above zero")
+            }
             Self::Unsupported(BodyqUnsupported::Nurbs { at }) => {
                 write!(f, "{at}: NURBS geometry is not queried yet")
             }
@@ -219,6 +240,9 @@ impl fmt::Display for BodyqError {
             Self::Defect(BodyqDefect::Ray) => f.write_str("a ray from the point was refused"),
             Self::Defect(BodyqDefect::NoEdgeBox { edge }) => {
                 write!(f, "{edge}: the curve cannot be enclosed")
+            }
+            Self::Defect(BodyqDefect::Tolerance) => {
+                f.write_str("a coincidence or accuracy is not a finite length")
             }
             Self::Defect(BodyqDefect::Betti { shell }) => {
                 write!(f, "{shell}: the cells give a negative first Betti number")

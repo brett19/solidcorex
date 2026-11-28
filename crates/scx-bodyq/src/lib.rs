@@ -50,6 +50,7 @@ mod geom;
 mod near;
 mod on;
 mod rays;
+mod recognize;
 mod side;
 mod tight;
 
@@ -57,6 +58,11 @@ pub use betti::{Betti, betti};
 pub use classify::{PointClass, classify_point};
 pub use error::{BodyqDefect, BodyqError, BodyqRefusal, BodyqUnsupported};
 pub use rays::RAYS;
+pub use recognize::{
+    Bore, Equivalence, Layer, Lone, NotPrism, Options as StackOptions, Piece, PrismSection,
+    Recognition, Slot, Stack, Stacks, Why, bores, hole_stacks, prism_equivalent, prism_section,
+    prism_section_charged, stack_bores,
+};
 pub use side::{Along, Sides, side_at_touch, sides_along};
 pub use tight::{tight_body_box, tight_box, tight_box_charged};
 
