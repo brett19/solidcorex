@@ -2441,18 +2441,19 @@ has a tangential crossing.
 
 ### 23.4 Measured (release, throwaway timer and counters, not committed)
 
-Corpus (SM10, release, against main at the merge base):
+Corpus (SM10, release, against main with SM6b):
 
 | | pass | refused | failed | total time |
 | --- | --- | --- | --- | --- |
-| main | 58 | 49 (`budget_exhausted` 1, `ssi_unresolved` 43, `ssi_untraced` 5) | 6 | 61.7 s |
-| `sm7` | 63 | 44 (`budget_exhausted` 1, `ssi_unresolved` 43) | 6 | 86.2 s |
+| main | 58 | 49 (`ssi_singular` 5, `ssi_unresolved` 38, `ssi_untraced` 6) | 6 | 12.7 s |
+| `sm7` | 63 | 44 (`ssi_singular` 5, `ssi_unresolved` 38, `ssi_untraced` 1) | 6 | 11.3 s |
 
 All five `ssi_untraced` cases now pass: `c1n_parab_parab_circle`,
 `c1n_sphereN_cylN_two_loops`, `c1n_torusN_planeN_nested`, `y23_t2_ex3_loop_two_curves` and
-`y23_t2_ex6_loop_and_point`. No other verdict changed, and no certificate fails. The time is not deterministic. The
-`sm7` run was at a load near 30, where `y23_t2_ex3` took 34 s; alone on a quiet machine it
-takes 6.5 s, for 10 branches.
+`y23_t2_ex6_loop_and_point`. No other verdict changed, and no certificate fails. The one
+`ssi_untraced` left, `c2n_cylN_on_planeN`, is an order-2 valley (SM6b), which the march does
+not trace. The time is not deterministic. `y23_t2_ex3` is the slowest case at 6.4 s, for
+10 branches; main spends 7.6 s refusing it.
 
 Per pair, NURBS against NURBS at a coincidence of `1e-9`, `intersect` end to end. The pin's
 figures are SM5's (18.4: the pin's whole intersection, `strip` off and on). Units are
