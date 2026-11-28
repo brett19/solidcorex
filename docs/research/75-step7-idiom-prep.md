@@ -2686,7 +2686,7 @@ stay. The step-7 audit of what assumed minor < major follows.
   per collapsed edge.
 - **What the check says.** The contract passes (`Contacts::Refused` and `Radial`); the structure
   pass reports exactly one `VertexNotManifold { pieces: 2 }` at the pole and refuses it only
-  under `Contacts::Manifold`. That is the truth: two lobes of the solid meet at the pole, a
+  under `Contacts::Manifold`. The body's genus is 1 (scx and the pin agree; the recipe states it and is `pinched`, so the manifold and mesh invariants are off). That is the truth: two lobes of the solid meet at the pole, a
   pinch. Not changed.
 - **Mass.** Needed no change: the breaks put `v = 1/2` on a patch edge, and the volume and area
   match `2 pi^2 R^3` and `4 pi^2 R^2` to `1e-12` (tilted frames too). The testkit truth
@@ -2703,7 +2703,9 @@ stay. The step-7 audit of what assumed minor < major follows.
   A first attempt, the least parallel radius over the corners, never passed the slivers along
   the meridian near the pole and refined to a duplicate point; the split bound fixes it. The
   ring torus path is unchanged (one `bool` test per triangle). The mesh oracle reports exactly
-  one `NonManifoldVertex`, the pole, which the test expects for the horn case.
+  one `NonManifoldVertex`, the pole, which the test expects for the horn case, and its fold limit
+  is off for the horn: the fan round the pole is the tip of two needles (`rho = z^2 / 2R`) and
+  turns by under a degree at a chord of 0.001, a property of the surface, not a fold.
 - **Boolean (broke, refused).** A cut across a horn torus's face is `Defect(Build)` today: the
   imprint trace keeps one collapsed edge per pole vertex, and a horn pole has two (both lobes).
   It is now `Unsupported(HornPole { operand, face })` (name `horn_pole`) from the trace. A plane

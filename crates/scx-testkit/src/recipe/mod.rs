@@ -29,7 +29,7 @@
 //! **Dependencies on 72's proposals.** The outcomes follow 72 §12.4 as ruled: the analytic
 //! SSI answers plane against all kinds, two spheres and coaxial pairs (`SsiPair` otherwise);
 //! a touch at a vertex or along an edge is built (BO7, BR10), and a touch inside a face
-//! too (BO25; D5 had it `Unsupported(NonManifold)`); a horn torus is built (MK4b).
+//! too (BO25; D5 had it `Unsupported(NonManifold)`); a horn torus is built (`MK4b`).
 
 // Fixed 3-arrays and loop counters only.
 #![allow(clippy::indexing_slicing)]

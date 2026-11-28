@@ -56,7 +56,7 @@ pub fn torus(
     }
     // Within the resolution of each other the radii are one: the tube meets the axis.
     if (small - big).abs() <= floor.mm() {
-        return horn(frame, 0.5 * (big + small), doc);
+        return horn(frame, 0.5 * (big + small), *doc);
     }
     let surface = Surface::Torus(Torus::new(
         *frame,
@@ -98,13 +98,13 @@ pub fn torus(
 /// is that pole, so the face covers `v` over `[1/2, 3/2]` and its loop runs the pole's
 /// collapsed edge, the meridian (a circle through the pole, closed there), the collapsed
 /// edge at the far end and the meridian down: 1 vertex, 3 edges, 1 face.
-fn horn(frame: &Frame, radius: f64, doc: &Document) -> Result<Made<TorusFaces>, MakeError> {
+fn horn(frame: &Frame, radius: f64, doc: Document) -> Result<Made<TorusFaces>, MakeError> {
     let surface = Surface::Torus(Torus::horn(
         *frame,
         Length::from_mm(radius),
         Sense::Forward,
     )?);
-    let mut asm = Assembly::new(doc)?;
+    let mut asm = Assembly::new(&doc)?;
     let pole = asm.vertex(frame.origin())?;
     // The meridian about the tube's centre on the x axis, from the pole (angle pi) once
     // round: as the ring torus's, its x is the frame's and its z is -y.

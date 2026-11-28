@@ -267,19 +267,22 @@ pub(super) fn recipes(res: f64) -> Vec<Recipe> {
     // is a vertex). The patch complex is not stated: a pinched torus is no patch class here.
     let part = torus_at([0.0; 3], 3.0, 3.0);
     let truth = truth_part(&part);
-    v.push(recipe(
-        "torus-horn",
-        "new (72 D3, built by MK4b)",
-        part,
-        vec![],
-        Outcome::Built(Topology {
-            solid_regions: 1,
-            shells: 1,
-            genus: 0,
-            cells: None,
-        }),
-        truth,
-    ));
+    v.push(
+        recipe(
+            "torus-horn",
+            "new (72 D3, built by MK4b)",
+            part,
+            vec![],
+            Outcome::Built(Topology {
+                solid_regions: 1,
+                shells: 1,
+                genus: 1,
+                cells: None,
+            }),
+            truth,
+        )
+        .pinched(),
+    );
     v.push(recipe(
         "torus-spindle",
         "new (72 §4.2)",
