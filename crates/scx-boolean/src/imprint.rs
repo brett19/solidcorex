@@ -85,6 +85,9 @@ pub(crate) struct Imprint {
     pub(crate) sections: Vec<EdgeId>,
     /// Each stage-3 merged point's draft vertex, in the points' order.
     pub(crate) points: Vec<VertexId>,
+    /// Each stage-4 lying piece's draft edge, in the pieces' order, where it is a cut
+    /// (inside the face, `along` none).
+    pub(crate) lying: Vec<Option<EdgeId>>,
 }
 
 /// `b`'s pieces that run along `a`'s, by `b`'s edge and piece index: `a`'s draft edge,
@@ -129,6 +132,7 @@ pub(crate) fn imprint(
         cut: BTreeMap::new(),
         cuts: Vec::new(),
         sections: Vec::new(),
+        lying: Vec::new(),
         made: Vec::new(),
         pieces: BTreeMap::new(),
     };
@@ -153,6 +157,7 @@ pub(crate) fn imprint(
         cuts,
         sections: b.sections,
         points: b.at,
+        lying: b.lying,
     })
 }
 
@@ -202,6 +207,8 @@ struct Build<'a> {
     cuts: Vec<EdgeId>,
     /// Each section's edge, in order.
     sections: Vec<EdgeId>,
+    /// Each lying piece's edge where it is a cut, in order.
+    lying: Vec<Option<EdgeId>>,
     /// The draft edges made or rewritten here, whose ends `reach` checks.
     made: Vec<EdgeId>,
     pieces: BTreeMap<(Side, FaceId), Vec<FaceId>>,
@@ -598,9 +605,11 @@ impl Build<'_> {
     fn lying(&mut self, ff: &FaceFace) -> Result<(), BooleanError> {
         for l in &ff.lying {
             if l.along.is_some() {
+                self.lying.push(None);
                 continue;
             }
             let (_, p) = self.piece_at(l.side, l.edge, l.t.mid())?;
+            self.lying.push(Some(p.edge));
             self.cuts.push(p.edge);
             self.cut
                 .entry((l.side.other(), l.face))
@@ -770,8 +779,13 @@ impl Build<'_> {
             let mut poles = BTreeMap::new();
             for l in &loops {
                 for (p, s, _) in l {
-                    if p.t.is_none() {
-                        poles.insert(p.ends[0], (p.edge, *s));
+                    // Two collapsed edges at one vertex (a horn torus's pole): the loop's
+                    // use of the vertex is not named by the vertex alone.
+                    if p.t.is_none() && poles.insert(p.ends[0], (p.edge, *s)).is_some() {
+                        return Err(BooleanError::Unsupported(BooleanUnsupported::HornPole {
+                            operand,
+                            face: f,
+                        }));
                     }
                 }
             }

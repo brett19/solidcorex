@@ -5071,3 +5071,1631 @@ So recognition itself is below the noise of the import (the check dominates, 74 
    known, and the near-zero and near-right cones with it.
 5. The reader's `ConeShape` refuses an angle-0 cone a file writes; `recognize_written` could
    take it (`scx-p21`'s row, not here).
+
+## 39. ST4 as built (11-28)
+
+Truth tests for `scx-stitch`, in `crates/scx-stitch/tests/truth.rs` (10 tests, 1 ignored). The
+solid helpers ST3 wrote (`explode`, `run`, `vol`, `assert_solid`, `regions`) moved to
+`tests/common/mod.rs`, shared by `orient.rs` and `truth.rs`; no test was removed. New
+dev-dependencies: `scx-boolean` (Boolean results to explode) and `scx-check` (`contract`); both sit
+below `scx-stitch` in `layers.txt`. No library code changed.
+
+### 39.1 Tests
+
+- `exploded_recipes_are_the_same_solid`: block (1, 3 steps), prism, cylinder (3, 7), cone, sphere
+  (4, 6), torus (3, 4), holed slab, cavity, each exploded to one sheet per face and stitched
+  back. Judged on shells, faces, edges, vertices and regions (equal to the source), volume and
+  area through `scx-mass` against the closed form where seed 0 has one (block 1 and 6; cylinder
+  2π and 6π; cone π/3 and π(1+√2); sphere 4π/3 and 4π; torus 4π² and 8π²; cavity 26 and 60) and
+  against the source otherwise, `outward`, and `scx_check::contract(.., Contacts::Refused)`.
+- `exploded_random_recipes_are_the_same_solid`: seeds 1 to 3 of block, prism, cylinder, cone and
+  sphere, same checks against the source.
+- `exploded_boolean_results_are_the_same_solid`: union, difference, intersection and a corner
+  notch of cubes (closed forms 1.875, 0.875, 0.125, 1 − 1/64), from `scx_boolean::boolean`.
+- `a_sheet_just_inside_the_coincidence_stitches_and_just_outside_does_not`: for every planar
+  face of block (1, 2 steps), prism and cylinder, the face's sheet moved along its normal. At
+  `INSIDE` (0.45 of the coincidence), both ways: `Want::Solid` gives the same counts, volume within
+  4e-5 relative, outward, nothing left open. At 1.1 of it: `Want::Sheets` gives the body less the
+  moved face's joins (edges + its shared edges, vertices + its vertices), `left` empty, and
+  `Want::Solid` is `Refused(NotSolid { Edge, Open })`.
+- `the_identified_spread_is_the_perturbation`: of the block's 8 identified vertices exactly the
+  4 of the moved face have spread above 0, all within `INSIDE`; 12 joins, the widest gap in
+  `[INSIDE, zone]`.
+- `a_join_past_the_pcurve_tolerance_is_typed`: at 0.9 of the coincidence the stitch answers
+  `Unsupported(Edges { why: Fit })` (a typed pending, not a wrong body); see 39.3.
+- `a_sheet_at_nine_tenths_of_the_coincidence_stitches` (`#[ignore]`): the truth that case owes.
+- `permuted_sheets_give_the_same_bits_for_every_recipe`: eight bodies (block, cylinder, cone,
+  sphere, torus, holed, cavity, a Boolean union), reversed and five seeded shuffles each; the
+  body's geometry as sorted `Debug` text (every float to its bits; no id) and the report's counts
+  are equal.
+- `permuted_perturbed_sheets_give_the_same_bits`: half the faces of a 2-step block moved 0.4 of
+  the coincidence, five shuffles, same geometry (the merged points and kept curves do not follow
+  the order).
+- `a_cap_on_an_open_box_closes_it`: the pin's cap-on-a-cube (`solidcore-ops` stitch tests),
+  restated for sheets: five faces stitched (`Want::Sheets`) into an open box, which is
+  `NotSolid { Open }` alone; with the sixth face laid on its rim it is a solid, volume 1000
+  (10 mm cube), area 600, same counts.
+
+### 39.2 Pin tests
+
+Ported: the cap on a cube's rim (as above, on sheets); `fork_351c57c`/the cube with a cavity and
+`stitched_solid_cavity_is_a_void` (ST3, `orient.rs`); the gap-bound truths (ST2,
+`the_gaps_hold_the_pins_bound_truths`); the stitch-sews-a-gap-within-tolerance-and-leaves-a-larger
+one (`issue_2975`) is the perturbation test. Not ported: the pin's lid on a pocket, partition that
+survives, edges of three faces and two boxes merged, which glue a sheet to a solid operand
+(`Unsupported(SolidOperand)` here) or merge faces (ST5); `a_material_side_lost_...`, which tests
+the pin's own judge. The counts the pin asserts for the cap ([10, 20, 12]) include faces and edges
+its gluing leaves split; here the closed form (6, 12, 8) is used.
+
+### 39.3 Found
+
+1. **A join 0.5 to 1.0 of the coincidence off the absorbed face's surface is `Unsupported(Fit)`.**
+   `glue` writes the absorbed face's pcurves from the kept edge's curve, and `pcurve_of` accepts a
+   curve within `Resolution::approx()` (half the zone) of the surface. A sheet moved 0.9 of the
+   coincidence along its normal is proved joined (gap bound 0.9 < zone) and then cannot be placed.
+   The answer is typed and the body never wrong, but the stitch's reach is half what 04's
+   coincidence promises. Not a small fix: a projection pcurve for a curve off its surface by up
+   to the zone (exact for a line on a plane, a fit elsewhere), or the face's loop moved onto the
+   kept curve, belongs to `scx-surface`/`scx-brep` (BR9's fitter). Deferred as follow-up row
+   **ST4a** with the ignored test above. Until then the tests' `INSIDE` is 0.45.
+2. **Candidate pairs are quadratic where many edges share both ends.** Counted with a throwaway
+   `eprintln` (not committed) on the join stage, pieces with equal ends compared pairwise before
+   the box test: each shared edge is two pieces, so a block gives 2 pairs per face, linear; a
+   sphere's lunes' meridians all join the two poles, so `n` lunes give `C(2n, 2)` pairs.
+   Follow-up row **ST4b**: order same-end pieces by a box or a midpoint and test the nearest.
+3. No other bug: orientation, counts, volume, area and `contract` held on every exploded recipe;
+   `NotOrientable` and `Undecided` (ST3's untested refusals) remain unbuilt from analytic sheets
+   and are not claimed.
+
+The notch case first asserted a wrong closed form (1 − 1/16; the small cube overlaps in a
+quarter-side cube, 1 − 1/64); the stitch was right. Truth over the pin held.
+
+### 39.4 Cost (pairs against faces, exploded bodies; unoptimised test build on a loaded host, so ms is indicative)
+
+Pairs are the join stage's candidate pairs (same-end piece pairs, then those surviving the box
+test) and the cut stage's vertex-edge box candidates; every pair is then proved by one to four
+`point_curve_gap`/`curve_curve_gap` calls on the lead piece's budget share.
+
+| body | faces | same-end pairs | after box | cut candidates | ms |
+|---|---|---|---|---|---|
+| Block 1 | 6 | 12 | 12 | 0 | 10 |
+| Block 2 | 24 | 48 | 48 | 0 | 34 |
+| Block 5 | 150 | 300 | 300 | 0 | 167 |
+| Block 10 | 600 | 1,200 | 1,200 | 0 | 670 |
+| Cavity 3 | 108 | 216 | 216 | 0 | 124 |
+| Cylinder 8 | 10 | 24 | 24 | 0 | 382 |
+| Cylinder 32 | 34 | 96 | 96 | 0 | 335 |
+| Sphere 8 | 8 | 120 | 112 | 0 | 2,693 |
+| Torus 4 | 16 | 32 | 32 | 16 | 1,740 |
+
+Planar blocks: exactly 2 pairs per face, linear, time linear (about 1.1 ms a face). Curved
+edges: 3 pairs per wall face on the cylinder, but the work is the curve gaps (0.3 to 2.7 s here).
+The sphere is the exception of 39.3.2.
+
+### 39.5 Open questions
+
+1. Should ST4a move the pcurve to the kept curve (the face is edited, 04 row 186's measured
+   raise on the face) or widen the writer's tolerance to the zone? The first changes geometry by
+   up to the zone, the second only the claimed accuracy.
+2. Solid operands (cap on a solid, lid on a pocket) have no ST row yet (ST3's open question 3).
+
+### 39.6 Proposed 04 row
+
+| 11-28 | (For the owner's review) ST4: truth tests for the stitch. Every testkit recipe (block, prism, cylinder, cone, sphere, torus, holed, cavity) and cube Booleans exploded to faces and stitched back is the same solid: counts, closed-form volume and area, `contract`; a sheet moved 0.45 of the coincidence stitches and 1.1 leaves the typed `NotSolid { Open }`; permuted input gives identical geometry. Found: a join 0.5 to 1.0 of the coincidence off the face is `Unsupported(Fit)` (rows ST4a, ST4b follow) | stitch → boolean, → check (dev only) | 74 §39 |
+
+## 40. ST4a as built (11-28)
+
+A join the stitch proved within the coincidence (the zone, `Resolution::coincidence`) but
+past the exact pcurve writer's tolerance (`Resolution::approx`, half the zone) is no longer
+refused `Unsupported(Edges { why: Fit })`: the absorbed face keeps its geometry and its use of
+the kept edge gets the pcurve of the kept curve's closest-point projection onto the face, the
+use's bound recording the certified gap that pcurve's image leaves from the curve. Changed:
+`scx-surface` (`pcurve_of_projection`), `scx-brep` (`Draft::write_pcurves_projecting`,
+`Projected`, `PcurveWriteError::Gap`), `scx-stitch` (`glue` writes through it; `raise_edge`) and `scx-stitch/tests/truth.rs`.
+
+### 40.1 The ruling (ruled 11-28 by the coordinator, for review)
+
+Do not move the face's geometry; write the absorbed face's pcurve as the kept curve's
+closest-point projection; record the measured, certified gap, bounded by the zone. Upheld as
+built. For: the face is the input's, and its surface stays exact (no edit of a face to fit an
+edge it was only proved near); the gap is a number the reader of the body can check, carried
+on the use where the disagreement is (one face's surface against one edge's curve); a join
+within the writer's tolerance writes what it wrote before (no projection is tried). Against:
+the edge-face consistency of the result is the zone's, not `approx`'s, so a later consumer
+that assumes `approx` for every use must read the use's bound (the brep check and
+`scx-check`'s gaps already do); moving the face (ST4's open question 1, first branch) would
+keep the writer's tolerance but changes geometry by up to the zone and is a face edit with its
+own raise. No evidence was found that the second is more correct.
+
+### 40.2 Decisions
+
+1. **The bound is on the use, not the edge** (`EdgeUse::bound`, `Certified` with
+   `Claim::PcurveOnSurface`, `Method::Interval`). For: the gap is between one use's pcurve image
+   and the edge's curve; the edge's other uses stay exact. Against: a reader asking "how far is
+   this edge from its faces" must also read the uses; `raise_edge` covers the case where that
+   matters (below).
+2. **The gap is recorded even where it is below the zone.** For: the claim is what was
+   proved, not a flag; the truth tests read it. Against: a record per projected use (one `Arc`).
+3. **Search width zone/64** (`Aim::Width`). For: the bound is the perturbation plus at most a
+   64th of the zone (the planar test checks `0.9 Z ..= 0.9 Z + Z/64`); a narrower aim costs work
+   for no decision. Against: a gap within Z/64 of the zone could be reported above it and raise.
+4. **The projection's reach is the allowance plus the absorbed edge's reach** (`near` in
+   `glue`). It can exceed the zone (an input edge already measured); a gap past the kept edge's
+   reach then raises the kept edge, `Measured`, to the gap, reported in `raised` with an
+   `AccuracyRaised` warning. For: nothing is refused that the join proved; the report says
+   where accuracy grew. Against: the raise is not exercised by a test (no corpus case has a
+   measured input edge joined past the zone).
+5. **Exact pcurves are tried first.** `write_pcurves_projecting` writes each use as
+   `write_pcurves` does and projects only where that would refuse `NeedsFit` or `OffSurface`.
+   For: every join within tolerance is unchanged, zero added projection or gap calls (measured,
+   40.4). Against: none found.
+6. **A use written again unchanged keeps its bound.** A face is rewritten once per join that
+   touches it; a use whose edge id, curve bits and pcurve bits equal the previous record's keeps
+   its `Arc` bound and is not searched again. For: the gap calls per face fall from 1+2+…+k to k.
+   Against: the comparison is by bits, so a rewrite that changes a pcurve by rounding certifies
+   again (correct, only slower).
+7. **The mass enclosure's trim boxes: main's fix kept.** A chart pcurve over a wide trim
+   encloses the cylinder's axis, where the chart angle is undefined; the whole-trim box was
+   `None` and the enclosure refused `Sign { NoBox }` (the cylinder wall moved 0.45 of the zone,
+   in tolerance, no projection, is refused at the merge base). The branch boxed the trim in 8
+   equal parts; BO10b's `strip_box` (halvings to 64 pieces) landed on main for the same cause
+   meanwhile, and the merge takes main's, so this step changes nothing in `scx-mass`. The
+   cylinder cases pass on it.
+8. **A pole is one nearest point.** `Closest::AlongU` is both a pole (one point at every `u`) and
+   an axis circle (a set); `nearest` takes it as the surface's pole (`Sphere::poles`,
+   `Cone::pole`, `Torus::pole`) whose `v` it is, and refuses a circle `NoClosedForm`. A sphere's
+   meridian projected pole to pole needed it. (A first try compared the points at `u = 0` and
+   `u = π`, which a cylinder's arc-length `u` of radius `1/(2k)` wraps onto the same point.)
+
+### 40.3 Tests
+
+- `scx-stitch/tests/truth.rs`: `a_sheet_at_nine_tenths_of_the_coincidence_stitches` un-ignored
+  (each block face, out and in, 0.9 Z: counts, volume and area to the move, `contract`);
+  `a_join_past_the_pcurve_tolerance_is_typed` **replaced on purpose** by
+  `a_join_past_the_pcurve_tolerance_records_its_certified_gap`: it proved a top face moved 0.9 Z
+  was `Unsupported(Fit)`, which is the behaviour this step removes; the new test proves the same
+  move stitches with four certified use bounds in `0.9 Z ..= 0.9 Z + Z/64`, no edge accuracy and
+  no edge raise, and `contract` holds. `curved_sheets_at_nine_tenths_of_the_coincidence_stitch`
+  (new): a cylinder wall quarter moved 0.9 Z off the axis and a sphere lune grown by 0.9 Z about
+  the centre stitch to the solid, closed-form volume and area to the move, every certified bound
+  within the zone. The perturbation tests run at 0.9 Z (`INSIDE`); `permuted_perturbed_sheets_give_the_same_bits`
+  also runs with one face moved `INSIDE` (every other face at 0.4 Z cannot go to 0.9 Z: two
+  adjacent faces each moved 0.9 Z leave their shared edge `0.9 √2 Z` apart, past the zone).
+- `scx-surface` `pcurve::tests`: `a_curve_off_the_surface_is_given_its_projection` (plane,
+  cylinder, sphere incl. a pole-to-pole meridian, torus; the pcurve image on each sample's
+  nearest point) and `a_projection_it_cannot_give_is_typed` (beyond reach `NotOnSurface`; a
+  cone's ruling off by 9e-6 `Inexact`; a cylinder's axis `NoClosedForm`).
+- No test removed besides the replaced one.
+
+### 40.4 Measurements
+
+Throwaway counters (not committed) in `pcurve_of_projection` (proj), the certified gap search
+(gap calls; gapwork is the budget it spent) and `write_pcurves_projecting` (writes); release
+build, the branch against the merge base, run alternately three times on one host, median ms
+of 30 stitches (stitch) and of the enclosure's volume (mass). Counts were the same in every run.
+The cases: a block's top face moved; block 5 (300 joins) with face 0 moved; a sphere of four
+lunes with one grown about the centre; a cylinder of four walls with one moved off the axis;
+each by 0, 0.45 and 0.9 of the zone.
+
+| case | joins | proj | gap | gapwork | stitch ms (branch / base) | mass ms (branch / base) |
+|---|---|---|---|---|---|---|
+| block1 top 0.45 | 12 | 0 | 0 | 0 | 0.48 / 0.48 | 0.04 / 0.04 |
+| block1 top 0.9 | 12 | 10 | 4 | 20 | 0.49 / refused `Fit` | 0.04 / — |
+| block5 face0 0 | 300 | 0 | 0 | 0 | 10.95 / 10.96 | 1.02 / 1.01 |
+| block5 face0 0.45 | 300 | 0 | 0 | 0 | 10.96 / 10.93 | 1.02 / 1.02 |
+| block5 face0 0.9 | 300 | 2 | 2 | 10 | 10.97 / refused `Fit` | 1.01 / — |
+| sphere4 lune 0 | 4 | 0 | 0 | 0 | 29.2 / 57.6 | 31.5 / 31.4 |
+| sphere4 lune 0.45 | 4 | 0 | 0 | 0 | 72.9 / 100.6 | 31.5 / 31.4 |
+| sphere4 lune 0.9 | 4 | 3 | 1 | 9 | 122.6 / refused `Fit` | 31.5 / — |
+| cyl4 wall 0 | 12 | 0 | 0 | 0 | 25.1 / 25.0 | 3.33 / 3.33 |
+| cyl4 wall 0.45 | 12 | 0 | 0 | 0 | 50.2 / refused `NoBox` | 3.41 / — |
+| cyl4 wall 0.9 | 12 | 10 | 6 | 606 | 71.1 / refused `Fit` | 3.43 / — |
+
+Read: in tolerance (0 and 0.45) the branch makes no projection and no gap search, and its
+times are the base's; the sphere's faster times come from main merged since the base (ST4b's
+candidates), not from this step. Past the tolerance the added work is a projection per use the
+exact writer refuses and a gap search per projected use that changed: before decision 6 the
+same cases searched 10 (block1, gapwork 50) and 10 (cyl4, gapwork 914) times; after, 4 and 6.
+The cylinder's 0.9 case costs 21 ms over its 0.45 case (the gap search on its arcs and the
+chart's projection), the sphere's 50 ms. The counts were taken on the branch before the last
+commit (`nearest`'s pole test now reads the surface's poles; same counts expected, the sphere
+case passes on the final commit).
+
+### 40.5 Open questions
+
+1. A cone's ruling (and chart) keeps the height, so off the cone it misses the nearest point by
+   `d tan` of the half-angle: a cone join past `approx` stays `Unsupported(Fit)`. A projected
+   form for the cone (the ruling through the foot) would close it.
+2. Which edge is kept is the join's (lead piece) choice; keeping the one whose projection
+   leaves the smaller gap would shrink the recorded bounds. Not measured.
+3. The testkit sphere's lunes carry `Measured` pole-use bounds of the zone, which a scaling
+   transform scales (to 1.000009e-5 at 0.9 Z growth); a transform scaling an input's bound is
+   right for a measured distance, but the stitch then sees it as past the zone. Harmless here;
+   worth a look when transforms are reviewed.
+4. `raise_edge` has no test (decision 4).
+
+### 40.6 Proposed 04 row
+
+| 11-28 | (For the owner's review) ST4a: a stitch join proved within the coincidence but past the exact pcurve tolerance is written, not refused: the absorbed face keeps its geometry, its use of the kept edge gets the kept curve's closest-point projection (`scx_surface::pcurve_of_projection`, `Draft::write_pcurves_projecting`), and the use's bound records the certified gap (`PcurveOnSurface`, interval search to a 64th of the zone); a gap past the kept edge's reach raises it, reported. Exact pcurves are tried first (joins in tolerance unchanged, zero added calls); unchanged uses keep their bound. Cones stay `Unsupported(Fit)` past `approx` | stitch → boolean, → check | 74 §40 |
+
+## 41. ST4b as built (11-28)
+
+The join stage of `scx-stitch` finds its candidate pairs near-linearly. Only `crates/scx-stitch`
+changed (`edges.rs`: `candidates`, `SMALL`; `tests/truth.rs`: one test).
+
+### 41.1 What changed
+
+Before: pieces with equal ends were paired all against all (`C(m, 2)` for `m` in a group), each
+pair box-tested (edge boxes grown by the larger reach), the survivors gap-proved. After: per
+same-end group, a pair is a candidate when it passes the old test (other sheets, edge boxes
+within the larger reach) **and** each piece's midpoint (a point of its curve) lies within the
+larger reach of the other's edge box. A group of at most `SMALL` = 8 pieces tests its pairs
+directly; a larger one builds one `BoxTree` over the group's edge boxes and queries each midpoint
+(grown by the group's largest reach), keeping later pieces only, so no pair is found twice. The
+candidates are the same `(lead, partners ascending)` lists in the same order whichever path
+found them.
+
+### 41.2 Why the pairs joined do not change
+
+The midpoint filter is conservative: the midpoint lies on the piece's curve, the other edge's box
+holds its whole curve, and a pair that is within the allowance (the larger reach) has every point
+of one curve within the allowance of the other. A pair the filter drops therefore has a true
+Hausdorff gap above the allowance, which the gap proof answers `Beyond`; `Beyond` pairs enter
+neither `maybe`, the heap, `Left::Undecided` nor `Left::Ambiguous`. So the heap, the joins and the
+report are those of the old code. Checked by hash: the whole report, vertices, edges and faces
+(ids and records, every float through `Debug`) of block 1/5/10, cylinder 32, sphere 8/16/32 and
+torus 4 are bit-identical before and after; all ST4 tests pass (including both permutation tests).
+
+### 41.3 Cases for and against
+
+For: edge boxes alone cannot separate the sphere's meridians (each spans the pole-to-pole box;
+112 of 120 pairs passed the box test at sphere 8), so a sweep or a sort along an axis by box would
+not have cut pairs; a midpoint does, with no new curve query (the piece's midpoint is already
+what `keep_order` reads) and no new tolerance. A box tree reuses `scx-algo`'s and gives ascending
+answers, so the order needs no extra sort.
+
+Against, and what was done: (1) an adversarial family whose boxes and midpoints all overlap (arcs
+bulging by less than the reach) still passes every pair, but those are within reach of each other
+and need the proof; the work there is inherent, not a search cost. (2) Nested boxes are not a
+problem because the test is symmetric (each midpoint in the other's box). (3) Fewer pairs are charged, and fewer far pairs share the budget, so each lead's share
+(`remaining / leads`) grew; where a far pair had been the second lead, the lone lead then took
+the whole remaining budget and its overspend surfaced as `Exhausted`, never `Undecided`
+(`a_join_no_share_decides_is_left_undecided` showed it: the arc against its coaxial arc had
+shared with an arc-to-chord pair the filter now drops). Fixed by dividing by `leads + 1`, so a
+lone lead keeps a part for the joins after it; the test passes with its limits unchanged. Only
+budget-limited runs differ (a pair that decided at a half share may be `Undecided` at a third),
+never which pairs join when the budget suffices. (4) Two code paths (direct and tree) must agree: both apply the
+same `possible` predicate to the same pairs, covered by the blocks (direct) and the spheres (tree)
+hashes. (5) Group-wise tree builds cost `O(m log m)`; groups of 2 to 8 skip it, so blocks do the
+same work as before (2 pairs a face).
+
+### 41.4 Measurements (release test build, throwaway counters not committed)
+
+Pairs the stage enumerates (same-end pairs before; midpoint-tree candidates plus direct pairs
+after), and the pairs left for gap proofs after all box tests:
+
+| body | faces | pairs before | proved before | pairs after | proved after | ms before | ms after |
+|---|---|---|---|---|---|---|---|
+| Block 1 | 6 | 12 | 12 | 12 | 12 | 1 | 1 |
+| Block 5 | 150 | 300 | 300 | 300 | 300 | 14 to 18 | 14 |
+| Block 10 | 600 | 1,200 | 1,200 | 1,200 | 1,200 | 51 | 57 |
+| Cylinder 32 | 34 | 96 | 96 | 96 | 96 | 22 | 24 |
+| Sphere 8 | 8 | 120 | 112 | 8 | 8 | 155 | 58 |
+| Sphere 16 | 16 | 496 | 480 | 16 | 16 | 352 | 109 |
+| Sphere 32 | 32 | 2,016 | 1,984 | 32 | 32 | 897 | 216 |
+| Torus 4 | 16 | 32 | 32 | 32 | 32 | 109 | 111 |
+
+Spheres are now linear (one pair per sheet), time 2.7 to 4x lower (the gap proofs of the 112 to
+1,984 far pairs were most of it). Blocks, the cylinder and the torus enumerate the same pairs, no
+added work (ms differences are noise).
+
+### 41.5 Test added
+
+`spheres_of_many_lunes_are_the_same_solid` (`truth.rs`): sphere 8, 16, 32 exploded and stitched
+back, `same_solid` against the closed form 4/3 pi and 4 pi (counts, `contract`, outward).
+
+### 41.6 Open
+
+1. A group whose boxes and midpoints all overlap (a bundle of near-coincident arcs) stays
+   quadratic in the proofs; a real bundle that dense is a body with many coincident edges, not seen
+   in the corpus or recipes.
+2. `SMALL` = 8 is a choice, not measured to a knee (both paths give the same pairs).
+
+### 41.7 Proposed 04 row
+
+| 11-28 | (For the owner's review) ST4b: the stitch's join stage finds candidates by midpoint, not all same-end pairs: a pair must also have each piece's midpoint within reach of the other's edge box (conservative, so the pairs joined are unchanged; bit-identical results on blocks, cylinder, spheres, torus); a sphere of n lunes does n pairs, not C(2n,2) (sphere 32: 32 vs 2,016, 0.9 s to 0.2 s); blocks unchanged | stitch (none new) | 74 §41 |
+## 42. ST5 as built (11-28)
+
+The single-body operations of §4.3 step 7 in `scx-stitch`, in new modules `src/single.rs`
+(`open_edges`, `gather`, `sew`) and `src/merge.rs` (`merge_faces`). Library edits outside them
+are small: `stitch.rs` gains `same_document` (the document check `stitch` already made, now
+shared) and `gathered` (the unsewn gather), `error.rs` two variants, `report.rs` a `Default`
+on `StitchReport`, `lib.rs` the exports. No new Cargo edge. 15 tests in `tests/sew.rs` and 4
+unit tests in `merge.rs`; nothing removed. The pin's `two_boxes_side_by_side_merge_into_one_box`
+and `edges_of_three_faces_the_body_came_with_...` (§39.2) are ported, the second restated
+(§42.4).
+
+### 42.1 Public API
+
+```rust
+pub fn open_edges(body: &Brep) -> Vec<EdgeId>;                       // curve edges of one fin, id order
+pub fn gather(bodies: &[&Brep], cx: &mut Cx<'_>) -> Result<Done<NoItems>, StitchError>;
+pub fn sew(body: &Brep, want: Want, cx: &mut Cx<'_>) -> Result<Sewn, StitchError>;
+#[non_exhaustive] pub struct Sewn { pub done: Done<NoItems>, pub report: StitchReport,
+                                    pub pieces: Vec<Vec<FaceId>>, pub open: Vec<EdgeId> }
+pub fn merge_faces(body: &Brep, faces: &[FaceId], cx: &mut Cx<'_>) -> Result<Merged, StitchError>;
+pub struct Merged { pub done: Done<NoItems>, pub report: MergeReport }
+#[non_exhaustive] pub struct MergeReport { pub faces: Vec<FaceMerge>, pub edges: Vec<EdgeJoin>,
+                                           pub left: Vec<MergeLeft> }   // FaceMerge, EdgeJoin: scx-brep's
+#[non_exhaustive] pub enum MergeLeft { Surfaces { edge, why: NotOneSurface }, Kept { at: Entity, why: Why },
+                                       Lines { vertex, why: NotOneLine } }
+#[non_exhaustive] pub enum NotOneSurface { Kind, Opposite, Apart(Length), NoBox, Pcurves(PcurveWriteError) }
+#[non_exhaustive] pub enum NotOneLine { Direction, Apart(Length), Pcurves(PcurveWriteError) }
+StitchRefusal::NoSuchFace { face };  StitchUnsupported::Loose { at: Entity }   // new variants
+```
+
+Same shape as `stitch` (§26.1): `&Brep` operands, `Cx` last, typed results, no flags.
+`Done<NoItems>` for the three that produce a body, since none skips an item (§26.5). `sew` takes
+`want` as `stitch` does (§4.3 gave `sew(body, cx)`), so a caller who wants a solid gets the
+orientation and the refusal; the pin's `Sewn::closed` is `open.is_empty()` plus the body having
+a solid region.
+
+### 42.2 `open_edges`, `gather`
+
+- `open_edges`: a curve edge with exactly one fin. A seam (one face twice) has two, an edge of
+  three faces has three, a collapsed edge (a pole) is not an edge to join. Sorted by id.
+  The pin returns record indices (`Order`); ids need no order.
+- `gather`: `stitch`'s copy stage with no identification and no edge stage. Body 0 is edited in
+  place, the others copied with their regions and shells whole (so solids stay solids) and
+  derived from their operand; nothing is joined. A body given twice is gathered twice (the pin
+  takes it once): the reference is the caller's statement, and the result then has two
+  coincident copies, which `check` reports. Nothing checks that gathered solids keep clear of
+  each other (that is `check`'s).
+
+### 42.3 `sew`: a body's own open edges, by `stitch`'s rules
+
+The body is cut into **pieces**, the connected sets of faces that already share an edge (any edge
+of two or more fins joins its faces, so the faces of an edge of three or more fins stay one
+piece); each piece is built with the body's own ids (`Draft::skip` leaves the gaps), the
+body's radial order on its edges, and stitched as a sheet. So `sew(&gather(sheets))` is
+`stitch(sheets)`, and the tests judge it so: same counts, closed-form volume and area, `outward`,
+`contract` and the same bits as the stitch, for block (1, 3 steps), prism, cylinder, cone, sphere,
+torus, holed and cavity, and under four orders of the faces.
+
+Lineage: operand `i` is piece `i`, and `Sewn::pieces[i]` lists its faces, which are the input
+body's own face ids (so `Origin::Operand(i, Entity::Face(f))` names the body's face `f`). A
+body with no open edge is returned as it is: one piece, empty `Changes`; but for `Want::Solid`
+a closed *sheet* (no solid region) is oriented, not returned.
+
+Cases for and against the piece rule:
+
+| Choice | For | Against |
+|---|---|---|
+| Pieces by shared edges, then `stitch` | The edges a body came with are never re-proved: no certified Hausdorff for them (§39.4 puts that at 1 ms per planar edge, 0.3-2.7 s per curved one), and edges of three faces survive (they would be `Left::Ambiguous` if exploded: 3 partners). Reuses `stitch` whole: one set of rules, one place for bugs, same permutation guarantee | A piece whose own open edges meet (a tube with its seam left open, one face wrapped round) breaks vertex clearance, so the answer is `Refused(VerticesWithinCoincidence)` naming the piece; the pin sews it. That is `check`'s verdict on the body too, but a repair tool will want the other answer (open question 1) |
+| Explode every face, stitch | Sews the tube | Re-proves every shared edge; loses the three-face edges; ids all change |
+| Sew in place on the body's draft | Ids kept, no copy | A second implementation of identification and edge joins beside `stitch`, the thing 74 §4 says to avoid |
+| Piece ids kept (skip gaps) | Lineage names the caller's entities | `Operand` index is the piece, not the body (the caller reads `pieces`); composing `Changes` has no API |
+
+Wire edges and lone vertices are `Unsupported(Loose)`: a piece holds faces, and silently dropping
+a wire would lose it. A body given in another document's resolution is `OtherDocument`.
+
+### 42.4 The pin's tests
+
+- *Two boxes merged* (`two_boxes_side_by_side_merge_into_one_box`, pin counts [6, 12, 8],
+  volume 2): the pin gets the split body from its Boolean. `scx_boolean::boolean` of two touching
+  boxes already gives the merged box (BR11 heals at its end), so the split body is built the way
+  a user gets one: the five outer faces of each block stitched (`Want::Solid`), ten faces, two
+  on each of four walls. `merge_faces` gives 6 faces, 12 edges, 8 vertices, volume 2, area 10,
+  `outward`, `contract`, 4 face merges and 4 edge joins; again it changes nothing; asked for all
+  faces but the second box's top it merges the other three walls and leaves the top split (7
+  faces, volume 2); asked for none it changes nothing.
+- *Three-face edges* (`edges_of_three_faces_the_body_came_with_do_not_refuse_the_stitch`): the pin
+  lays a cap on a cube beside a partition. Here the partition is built (the ten-face body, its
+  faces given to two solid regions, the wall between them one face: 11 faces, 4 edges of three
+  faces) and: `sew` returns it as it is, `merge_faces` of every face merges nothing across the
+  three-face edges (the two walls of each side lie on one plane, across edges of three faces
+  bound by different shells), and six loose sheets of a cube gathered beside it sew into a cube
+  (12 joins) while the partition's four three-face edges stay. **Not ported**: the cap on the
+  cube's own edges, the lid on the pocket, and the cap beside the partition. They glue a sheet
+  onto edges that already have two faces, giving three or four fins (`EdgePending::Radial`,
+  unbuilt) and a solid operand (`SolidOperand`, which §39.5.2 left without a row). Candidate row
+  ST5a: Radial order for a join onto a two-fin edge, then closing a space (pin `close_onto_shared_edges`).
+- *Keeping edges* (`merge_faces_keeps_the_record_edges_it_is_given`): the pin keeps record edges;
+  here the caller names the faces, and a face left out keeps every edge it has (the partial
+  two-box test). Same power, no record order.
+- *Thread root across a seam* (`a_thread_s_root_merged_across_its_seam_stays_valid`): not ported.
+  Merging across a seam is `Draft::merge_faces`'s (BR11, equal surfaces), which `merge_faces`
+  calls; the periodic cases are BR11's tests.
+
+### 42.5 `merge_faces`: only faces proved on one surface
+
+`Draft::merge_faces`/`join_edges` (BR11) merge only `==` surfaces and curves. Faces of different
+operands lie on one plane with different frames. `merge_faces` proves them one surface within
+the resolution, makes them `==` and hands them to the draft:
+
+1. **Candidates.** An edge of exactly two fins whose faces are both asked for, are distinct, have
+   the same shells, run opposite senses, and whose surfaces are not `==`. One pair per face pair;
+   protected (any fin on a face not asked for) edges are never candidates.
+2. **Proof.** For planes: normals the same way and `|f(q)| + sin(angle) R <= Resolution::approx`,
+   `q` the face's box centre moved onto its own plane, `f` its signed distance from the other
+   plane, `R` the box's half diagonal. This bounds the distance of every point of the face's box
+   from the other plane (an affine function's maximum), so a face with curved edges is covered
+   without sampling. Both directions are tested per pair. A pair whose normals differ by more
+   than 1e-3 (the sine) is a crease, not a near miss, and is not reported. Other kinds merge only
+   when `==`: `Left::Surfaces { why: Kind }`.
+3. **Groups.** Pairs that pass are joined in a union-find; each group's surface is its *least by
+   geometry* (frame origin, normal, x axis), not by id, so the bits do not depend on the order the
+   body was built in (`merging_is_the_same_whatever_the_order`, 5 shuffles). Each member is proved
+   against that surface alone, so a chain of small steps never adds up; it takes the surface and its
+   pcurves are written afresh (all or nothing; refusal leaves the face as it was and is
+   `Pcurves`).
+4. **Merge.** The draft's own `merge_faces` on every `==` pair no protected edge holds.
+5. **Edges.** Line edges that meet at vertices nothing else ends at, bound by the same two faces
+   and collinear within `approx` (every vertex of the run to the canonical line), become one
+   curve and are joined by the draft: the run is oriented to its lexicographically least end, takes
+   the first edge's line (reversed if it ran the other way), each edge the span that runs on from
+   the one before (exactly, so BR11's run-on test holds), edges that ran against the run turned
+   (ends swapped, uses' senses flipped) and every face's pcurves written afresh; a refused face puts
+   everything back. Then `join_edges_at` at each interior vertex. Non-line curves are joined only
+   where already equal (two arcs of one circle).
+
+The solid is unchanged to within the resolution: a face moves at most `approx` onto its group's
+plane, an edge at most `approx` onto its run's line, and both are zero for planes and lines
+that are the same to the bit (the tests). `approx` is half the zone because the pcurve writer
+places a curve within it of its surface (§39.3.1); the merge stays inside what the writer can
+place, so there is no `Fit` hole here.
+
+Tests (all closed forms or the source's, no pin output): the ten-face two boxes (above); a
+subdivided block (steps 2, 3 and 5, seeds 0 to 3, 24 to 150 faces each on its own frame) back to
+6 faces, 12 edges, 8 vertices, volume 1 and area 6 at seed 0 and the source's otherwise,
+`outward` and `contract`; every other recipe (prism, cylinder 3 and 7, cone, sphere, torus,
+holed, cavity 1 and 3) keeps volume, area, `outward`, `contract`, region count and never gains
+a face; five shuffles of the two boxes' sheets give identical bits; a face not in the body is
+`Refused(NoSuchFace)`; another resolution `OtherDocument`; plane unit tests: the same plane on
+another frame deviates by 0 (<1e-15), a parallel offset by the offset, a tilt by the angle over
+the extent, opposite normals `Opposite`.
+
+### 42.6 Measured (throwaway counters, not committed; unoptimised test build, loaded host)
+
+Subdivided blocks, `merge_faces` of all faces:
+
+| steps | faces | edges | candidate pairs | `join_edges_at` | budget work | ms |
+|---|---|---|---|---|---|---|
+| 2 | 24 | 48 | 48 | 12 | 248 | 5.5 |
+| 5 | 150 | 300 | 300 | 48 | 1,238 | 13.9 |
+| 10 | 600 | 1,200 | 1,200 | 108 | 4,568 | 62.5 |
+
+Exactly 2 candidate pairs per face, `plane_deviation` called 3,444 times over the three runs
+(two per pair and one per member: 2.2 per candidate), work 7.6 a face, time linear (0.09 to 0.1 ms a face). No pair test is quadratic: candidates are the edges
+between two asked-for faces, and the proof never looks at a face pair that shares no edge.
+`Draft::join_edges_at` builds its vertex index on every call (O(E) each), so the chain
+joins are O(joins x E): 108 calls on 1,200 edges is fine, a body of 100,000 edges with 10,000
+collinear splits is not. The batch `Draft::join_edges` has one index but cannot be told to leave
+the faces not asked for alone (it joins protected pairs of edges). Open question 2.
+
+### 42.7 Open questions
+
+1. Should `sew` repair a piece whose own open edges meet (a wrapped tube)? Cutting it by faces
+   fixes it where it has no edge of three faces; with them it is ambiguous. Today it is the typed
+   refusal of the piece.
+2. `Draft::join_edges_at_with(&Stars)` or a batch `join_edges` over a vertex set would make the
+   chain joins linear (a `scx-brep` change; not made here).
+3. Opposite-sense planes (`Opposite`) and the quadrics (a cylinder on two frames) are not
+   merged. The first needs a face turned over (loops reversed, sides swapped); the second the
+   same proof as the planes over the axis. Neither occurs in the recipes or the NIST set read so far.
+4. Lineage of `sew` names pieces, not the body. A `Changes` composition would let `sew` say
+   "operand 0".
+
+### 42.8 Proposed 04 row
+
+| 11-28 | (For the owner's review) ST5: `scx_stitch::{open_edges, gather, sew, merge_faces}`. `open_edges(&Brep) -> Vec<EdgeId>`: curve edges of one fin. `gather(&[&Brep], cx)`: bodies in one, unsewn, body 0 edited, others copied with their regions and shells. `sew(&Brep, Want, cx) -> Sewn`: the body is cut into the connected sets of faces that already share edges (kept ids), which are stitched as sheets by `stitch`'s rules, so edges the body came with, edges of three faces among them, are never re-proved; `Sewn` names the pieces (operand `i`) and the open edges left. `merge_faces(&Brep, &[FaceId], cx) -> Merged`: faces asked for are merged only where proved on one surface within the resolution (planes: box-bounded distance <= `Resolution::approx`, by the group's geometric least frame), then collinear line edges joined; nothing outside the faces asked for is touched; `Left` names each near miss (crease not reported). Solid kept to `approx`. Measured 2 candidate pairs per face, time linear | Amends nothing; adds `NoSuchFace` and `Loose` to the stitch's errors | 74 §42 |
+
+## 43. HL3 as built (11-28)
+
+`scx_hlr::outline(&Brep, &View, &mut Cx) -> Result<Outline, HlrError>` and `Scene::outlines`, in
+`crates/scx-hlr/src/outline.rs`. This is (C) of 74 §5.1, `eval/outline.rs` (`stretches`) and
+`outline/pieces.rs`, rebuilt on exact cuts instead of 32 samples. Cargo: `scx-nurbs` moves from
+dev-dependency to dependency of scx-hlr (for `Approach`; below hlr already, no layer change). HL1's
+`Run::face` is split so `outline` shares its recognition (`Run::quadric`), its splitting planes
+(`ruled_or_round`, `plane_hits`) and `contour::edge_planes` (new, torus meridians and parallels).
+
+### 43.1 Public API
+
+```rust
+pub fn outline(body: &Brep, view: &View, cx: &mut Cx<'_>) -> Result<Outline, HlrError>;
+impl Scene<'_> { pub fn outlines(&self, view: &View, cx: &mut Cx<'_>) -> Result<Vec<Outline>, HlrError>; }
+pub struct Outline { pub stretches: Vec<Stretch>, pub undecided: Vec<EdgeUndecided> }
+pub struct Stretch { pub edge: EdgeId, pub range: Extent1d, pub ends: [Point3; 2], pub whole: bool }
+pub struct EdgeUndecided { pub edge: EdgeId, pub why: OutlineUndecided }
+pub enum OutlineUndecided { MoreThanTwoUses, Face { face, why: Why }, Cuts(Undecided), Unplaced { face } }
+impl Outline { pub fn images(&self, body: &Brep, view: &View, origin: Point3) -> Result<Images, HlrError>; }
+pub struct Images { pub images: Vec<StretchImage>, pub pending: Vec<EdgeId> }   // scx_planar::Curve2 pieces
+pub fn drop_coincident(curves: Vec<Curve2>, tol: f64) -> Vec<Curve2>;
+pub const FACING: f64 = 1e-9;  pub const EDGE_ON: f64 = 1e-6;  pub const STEP: f64 = 1e-5;
+```
+
+Phase `hlr.outline`, `Progress` per edge; budget one unit per edge and one per span classified.
+
+### 43.2 Method
+
+A face faces the viewer where its normal out of the material has `n . v > FACING`, `v = -d`. Along
+an edge a face's `n . v` is zero only where the edge meets the surface's silhouette. For a
+cylinder, cone or sphere that curve lies in a plane HL1 already builds (the candidates' splitting
+planes); for a torus edge (a meridian or parallel) `n . v = 0` is a closed-form angle, cut by a
+plane through it (`contour::edge_planes`). The edge's crossings with those planes
+(`intersect_curve`, complete for analytic curves) are every place a face's state can change; one
+point per span between them decides it, and adjacent outline spans merge. An extra crossing splits a
+stretch in two that are merged again.
+
+- Out of the material: the front side's normal points into the front region, so `-n` when the front
+  region is solid, `n` when the back one is. A sheet (neither side solid) is seen from both sides
+  (`|n . v|`); a face between two solids is never seen.
+- Edge-on at the edge (`|n . v| <= EDGE_ON`): the face is asked a hair inside it (`STEP` of its
+  size), by stepping to each side along `n x tangent`; the side proved `Inside` by `contains_uv`
+  that leans more decides (the pin's rule, with the side tested instead of clamped). `Near` does not
+  count: next to a smooth edge of two faces both sides are `Near` and lean alike.
+- Edges: a wire and a seam (one face on both sides) have none. More than two uses is
+  `MoreThanTwoUses`, a freeform or unbounded face `Face { why }`, an edge whose cuts are not
+  closed-form (NURBS curve; a torus edge that is no meridian or parallel) `Cuts(..)`, a point no
+  face could place `Unplaced`. The pin errors on the first and samples the rest.
+- Images: `Outline::images` is `project::pieces` over each stretch (exact lines and conic arcs; an
+  edge seen end on has none; NURBS curves are `pending`). `drop_coincident` is `pieces.rs`'s: lines on
+  one line become the stretches they cover, equal conics (or run the other way) once.
+- Not ported from `pieces.rs`: `conic_spans`, `flat_conic`, `round_conics`, `meet_at_shared_ends`,
+  `near`, the `Piece` enum. They repair sampled or spline-fitted images (a rational spline that is
+  conics, a conic that is a line, arcs that join to a circle, ends that nearly meet). Here every image
+  is already an exact conic arc or line (edge-on circles are lines, `project::edge_on`) with exact
+  ends, so none has anything to repair.
+
+### 43.3 Cases for and against
+
+- *Exact cuts, not 32 samples.* For: the pin misses a face that turns toward the viewer and away
+  within a 32nd of an edge (its own docs say so); here the cone test (a sliver of 1.4 % of a rim,
+  centred half a sample from the nearest) finds it exactly (`2 acos(1 - 1e-3)` long), where the pin
+  sees none of it on the top rim and all of the bottom rim. Against: only analytic faces and curves;
+  a NURBS edge or face is typed undecided where the pin sampled it (step 5).
+- *Typed per-edge refusals, not one error.* For: one freeform face does not lose the other edges
+  (HL1's rule). Against: callers read two lists.
+- *A sheet is seen from both sides.* For: an open sheet's border is outline whichever side the eye
+  is on; the pin used the face's own normal. Against: nothing found.
+- *`Inside` only for the lean step.* For: a smooth edge between two faces, both edge-on to the view,
+  gets opposite leans from the two sides it truly has. Against: on a face too thin for the step nothing
+  is proved and the face reads "away"; the step is one sized constant (open, 43.7).
+- *The pin's `HAIR` snap to vertices and its point-stretch drop are not ported.* Cuts are exact, so an
+  end on a vertex is that vertex's parameter and stretches shorter than rounding are not made.
+
+### 43.4 Tests (`crates/scx-hlr/tests/outline.rs` 17, `pin_cases.rs` 4; truth is closed form or an independent scan)
+
+- cube: iso view gives exactly the six non-crease edges, whole (ends' coordinate sums 1 and 2); along
+  an axis the four edges of the near face;
+- cylinder: across the axis the near half of each rim (`pi` each, ends at `y = +-r`), none on the seam;
+  along the axis the whole near rim (the wall is edge-on at it); aslant the far half of the top rim and
+  the near half of the bottom (`pi` each, by the midpoint's side);
+- made sphere and torus: one face with seams, no outline edge in 8 views;
+- a wall split on its own silhouette (generated cylinder, each generator seen along its tangent from
+  both sides): outline, whole: the lean rule;
+- the sliver above (cone frustum, `delta = 1e-3`);
+- a dense scan, independent of the closed forms (2048 samples per edge, facing from the surface normal
+  and regions; samples within 2 steps of a stretch end and edge-on samples skipped): every generated
+  block, prism, quad sheet, cylinder, cone, sphere, torus, holed slab and stack in 8 views, and a made
+  cylinder, two cones and two tori in a tilted frame (over 100,000 and 50,000 samples compared);
+- a sheet from either side (8 border edges), edge-on (none); an edge of four uses is
+  `MoreThanTwoUses`; a NURBS rim `Cuts(NurbsEdge)`, an unweighted net `Face { Freeform }`;
+- images: a cube along an axis is four exact lines of the unit square, two bodies drawn once; two
+  coaxial cylinders along the axis give 8 quarter arcs of weight `cos 45` on radius 2, which become 4;
+- placement: a cylinder at (1e6, -2e6, 3e6) has the same ranges and the moved ends; the same Debug
+  text twice; a stop gives `Stopped`, small budgets `Exhausted`.
+- `pin_cases.rs` (4): tubes of (R, r) = (10, 1), (1e3, 1), (1e3, 0.01), (1e6, 0.01) seen from above hide
+  exactly `|hypot(x, y) - R| <= r` (hidden lines, over 100 samples each); a torus tilted 1e-3 to 0 off
+  its axis keeps its contour with `n . d = 0`; the contour's width along each screen axis is
+  `R |u_plane| + r` (support function); cones with axes turned 0 to 1e-3 at 3e5 mm.
+
+### 43.5 The pin's 88 tests (`hlr/tests.rs`), one by one
+
+The 88 belong to (A), the hidden-line pipeline; most test mechanisms scx replaced by design. HL1 and
+HL2 had ported 21 of them (HL1 and HL2 rows). Counts: HL2 9, HL1 12, NEW 11, DESIGN 42, STEP5 9, OPEN 5.
+
+None asserted something wrong about a closed form. Where scx differs it is a stated deviation, not a
+pin error: the pin's `uncertain` (STEP5 rows) is typed `Pending`; touching boxes draw doubled strokes
+(HL2 §37.7; `drop_coincident` now exists for the images). The one place the pin is wrong in fact is
+the stretch missed between two samples (its docs say so): the sliver test.
+
+| # | pin test | disposition | where, or why not |
+|---|---|---|---|
+| 1 | `iso_cube_hides_the_three_back_edges` | HL2 | ported by HL2 (74 §37.5) |
+| 2 | `a_box_in_front_hides_the_middle_of_an_edge` | HL2 | ported by HL2 (74 §37.5) |
+| 3 | `quadratic_roots_with_no_linear_term` | DESIGN | the pin solves its own quadratics; scx uses closed forms in scx-surface and PL6 (their tests) |
+| 4 | `a_torus_seen_along_its_axis_has_both_equator_silhouettes` | HL1 | covered by `tests/silhouettes.rs` (torus along and across the axis, patches, far from the origin) |
+| 5 | `far_apart_bodies_do_not_merge_nearby_visible_edges` | HL2 | ported by HL2 (74 §37.5) |
+| 6 | `a_thin_torus_tube_stops_a_ray` | NEW | `pin_cases.rs` a_tube_hides_exactly_the_points_within_its_radius... (R, r) = (10,1), (1e3,1), (1e3,0.01), (1e6,0.01), closed form `|hypot(x,y) - R| <= r` |
+| 7 | `a_thin_tube_on_a_huge_torus_stops_a_ray` | NEW | `pin_cases.rs` a_tube_hides_exactly_the_points_within_its_radius... (R, r) = (10,1), (1e3,1), (1e3,0.01), (1e6,0.01), closed form `|hypot(x,y) - R| <= r` |
+| 8 | `a_hair_thin_tube_on_a_kilometre_torus_stops_a_ray` | NEW | `pin_cases.rs` a_tube_hides_exactly_the_points_within_its_radius... (R, r) = (10,1), (1e3,1), (1e3,0.01), (1e6,0.01), closed form `|hypot(x,y) - R| <= r` |
+| 9 | `a_ray_from_the_hole_crosses_a_thin_large_torus` | NEW | `pin_cases.rs` a_tube_hides_exactly_the_points_within_its_radius... (R, r) = (10,1), (1e3,1), (1e3,0.01), (1e6,0.01), closed form `|hypot(x,y) - R| <= r` |
+| 10 | `a_torus_seen_nearly_along_its_axis_keeps_its_silhouettes` | NEW | `pin_cases.rs` a_torus_seen_a_hair_off_its_axis_keeps_two_silhouettes_with_n_dot_d_zero (tilts 1e-3 to 0) |
+| 11 | `a_shallow_cut_through_a_torus_tube_is_found` | NEW | `pin_cases.rs` a_tube_hides_exactly_the_points_within_its_radius... (R, r) = (10,1), (1e3,1), (1e3,0.01), (1e6,0.01), closed form `|hypot(x,y) - R| <= r` |
+| 12 | `nearest_points_on_a_traced_silhouette_are_found_as_by_every_chord` | DESIGN | a traced (sampled) silhouette: scx silhouettes are closed forms, freeform waits on HL4 |
+| 13 | `a_cylinder_seen_from_the_side_has_exact_silhouette_lines` | HL1 | covered by `tests/silhouettes.rs` (torus along and across the axis, patches, far from the origin) |
+| 14 | `a_sphere_outline_is_exact_conic_arcs_in_any_view` | HL1 | covered by `tests/silhouettes.rs` (torus along and across the axis, patches, far from the origin) |
+| 15 | `a_torus_seen_face_on_is_drawn_at_both_equators` | HL1 | covered by `tests/silhouettes.rs` (torus along and across the axis, patches, far from the origin) |
+| 16 | `an_edge_under_a_torus_is_hidden_where_the_tube_covers_it` | NEW | `pin_cases.rs` a_tube_hides_exactly_the_points_within_its_radius... (R, r) = (10,1), (1e3,1), (1e3,0.01), (1e6,0.01), closed form `|hypot(x,y) - R| <= r` |
+| 17 | `a_part_far_from_the_origin_draws_the_same_as_at_the_origin` | HL2 | ported by HL2 (74 §37.5) |
+| 18 | `freeform_faces_are_reported_and_never_hide_for_certain` | STEP5 | a freeform ("left-out") face: the pin says `uncertain` from samples, here the span is `Pending::Outline`/`Occluder` by name (HL2 §37.3) and the face `Unsupported(Freeform)`; the typed forms are tested in HL1 (`a_freeform_face_is_named_unsupported`); a hidden-line scene with a freeform occluder is open (needs a NURBS-face scene builder), and real answers wait on HL4/step 5 |
+| 19 | `a_flat_spline_patch_is_a_plane_that_hides_for_certain` | DESIGN | surface recognition (torus or sphere stored as splines, form against label) is SU7 `scx_surface::recognize` and SP2b, tested there; HL1 has the rational cylinder |
+| 20 | `a_circle_racing_through_its_first_turn_is_drawn_whole_edge_on` | DESIGN | recognising a NURBS arc as a circle by sampling and knot spans: scx edges are exact analytic curves or typed `Pending::Curve` (step 5); surfaces go through SU7 `recognize` (its tests) |
+| 21 | `an_arc_racing_through_almost_a_full_turn_is_drawn_whole` | DESIGN | recognising a NURBS arc as a circle by sampling and knot spans: scx edges are exact analytic curves or typed `Pending::Curve` (step 5); surfaces go through SU7 `recognize` (its tests) |
+| 22 | `a_short_piece_of_a_fast_arc_turns_its_own_way` | DESIGN | recognising a NURBS arc as a circle by sampling and knot spans: scx edges are exact analytic curves or typed `Pending::Curve` (step 5); surfaces go through SU7 `recognize` (its tests) |
+| 23 | `an_arc_whose_whole_domain_is_8_roundings_wide_is_not_guessed` | DESIGN | recognising a NURBS arc as a circle by sampling and knot spans: scx edges are exact analytic curves or typed `Pending::Curve` (step 5); surfaces go through SU7 `recognize` (its tests) |
+| 24 | `a_piece_in_a_knot_span_of_1e_11_turns_its_own_way` | DESIGN | recognising a NURBS arc as a circle by sampling and knot spans: scx edges are exact analytic curves or typed `Pending::Curve` (step 5); surfaces go through SU7 `recognize` (its tests) |
+| 25 | `a_curve_that_swerves_where_its_weight_is_near_zero_is_not_taken_for_a_circle` | DESIGN | recognising a NURBS arc as a circle by sampling and knot spans: scx edges are exact analytic curves or typed `Pending::Curve` (step 5); surfaces go through SU7 `recognize` (its tests) |
+| 26 | `an_edge_leaving_a_left_out_faces_box_in_front_stays_visible` | STEP5 | a freeform ("left-out") face: the pin says `uncertain` from samples, here the span is `Pending::Outline`/`Occluder` by name (HL2 §37.3) and the face `Unsupported(Freeform)`; the typed forms are tested in HL1 (`a_freeform_face_is_named_unsupported`); a hidden-line scene with a freeform occluder is open (needs a NURBS-face scene builder), and real answers wait on HL4/step 5 |
+| 27 | `a_nearly_straight_cubic_is_not_taken_for_a_huge_circle` | DESIGN | recognising a NURBS arc as a circle by sampling and knot spans: scx edges are exact analytic curves or typed `Pending::Curve` (step 5); surfaces go through SU7 `recognize` (its tests) |
+| 28 | `an_edge_dipping_behind_a_left_out_face_between_samples_is_uncertain` | STEP5 | a freeform ("left-out") face: the pin says `uncertain` from samples, here the span is `Pending::Outline`/`Occluder` by name (HL2 §37.3) and the face `Unsupported(Freeform)`; the typed forms are tested in HL1 (`a_freeform_face_is_named_unsupported`); a hidden-line scene with a freeform occluder is open (needs a NURBS-face scene builder), and real answers wait on HL4/step 5 |
+| 29 | `an_arc_that_turns_back_is_drawn_as_chords` | DESIGN | recognising a NURBS arc as a circle by sampling and knot spans: scx edges are exact analytic curves or typed `Pending::Curve` (step 5); surfaces go through SU7 `recognize` (its tests) |
+| 30 | `a_closed_edge_that_turns_back_with_no_pieces_is_drawn_as_chords` | DESIGN | recognising a NURBS arc as a circle by sampling and knot spans: scx edges are exact analytic curves or typed `Pending::Curve` (step 5); surfaces go through SU7 `recognize` (its tests) |
+| 31 | `a_cone_tip_trimmed_near_the_apex_is_only_its_tip` | HL1 | covered by `tests/silhouettes.rs` (torus along and across the axis, patches, far from the origin) |
+| 32 | `an_edge_behind_a_left_out_freeform_face_is_uncertain_there` | STEP5 | a freeform ("left-out") face: the pin says `uncertain` from samples, here the span is `Pending::Outline`/`Occluder` by name (HL2 §37.3) and the face `Unsupported(Freeform)`; the typed forms are tested in HL1 (`a_freeform_face_is_named_unsupported`); a hidden-line scene with a freeform occluder is open (needs a NURBS-face scene builder), and real answers wait on HL4/step 5 |
+| 33 | `a_sloping_edge_that_runs_behind_a_left_out_face_is_uncertain` | STEP5 | a freeform ("left-out") face: the pin says `uncertain` from samples, here the span is `Pending::Outline`/`Occluder` by name (HL2 §37.3) and the face `Unsupported(Freeform)`; the typed forms are tested in HL1 (`a_freeform_face_is_named_unsupported`); a hidden-line scene with a freeform occluder is open (needs a NURBS-face scene builder), and real answers wait on HL4/step 5 |
+| 34 | `a_torus_stored_as_a_rational_spline_patch_is_recognised` | DESIGN | surface recognition (torus or sphere stored as splines, form against label) is SU7 `scx_surface::recognize` and SP2b, tested there; HL1 has the rational cylinder |
+| 35 | `a_torus_patch_with_a_bump_in_a_narrow_knot_span_is_not_taken_for_a_torus` | DESIGN | surface recognition (torus or sphere stored as splines, form against label) is SU7 `scx_surface::recognize` and SP2b, tested there; HL1 has the rational cylinder |
+| 36 | `a_big_circle_passing_behind_a_thin_left_out_face_is_uncertain_there` | STEP5 | a freeform ("left-out") face: the pin says `uncertain` from samples, here the span is `Pending::Outline`/`Occluder` by name (HL2 §37.3) and the face `Unsupported(Freeform)`; the typed forms are tested in HL1 (`a_freeform_face_is_named_unsupported`); a hidden-line scene with a freeform occluder is open (needs a NURBS-face scene builder), and real answers wait on HL4/step 5 |
+| 37 | `a_torus_in_two_halves_keeps_whole_outlines_with_fine_trims` | HL1 | covered by `tests/silhouettes.rs` (torus along and across the axis, patches, far from the origin) |
+| 38 | `an_arc_folding_back_under_a_left_out_face_seen_edge_on_is_uncertain_there` | STEP5 | a freeform ("left-out") face: the pin says `uncertain` from samples, here the span is `Pending::Outline`/`Occluder` by name (HL2 §37.3) and the face `Unsupported(Freeform)`; the typed forms are tested in HL1 (`a_freeform_face_is_named_unsupported`); a hidden-line scene with a freeform occluder is open (needs a NURBS-face scene builder), and real answers wait on HL4/step 5 |
+| 39 | `a_left_out_face_curling_over_its_own_edge_makes_it_uncertain` | STEP5 | a freeform ("left-out") face: the pin says `uncertain` from samples, here the span is `Pending::Outline`/`Occluder` by name (HL2 §37.3) and the face `Unsupported(Freeform)`; the typed forms are tested in HL1 (`a_freeform_face_is_named_unsupported`); a hidden-line scene with a freeform occluder is open (needs a NURBS-face scene builder), and real answers wait on HL4/step 5 |
+| 40 | `a_plate_just_above_a_box_in_a_large_scene_is_not_looked_through` | HL2 | ported by HL2 (74 §37.5) |
+| 41 | `a_sphere_with_a_spline_band_between_record_caps_is_one_sphere` | DESIGN | surface recognition (torus or sphere stored as splines, form against label) is SU7 `scx_surface::recognize` and SP2b, tested there; HL1 has the rational cylinder |
+| 42 | `chords_of_a_racing_circle_stay_within_their_stated_deviation` | DESIGN | recognising a NURBS arc as a circle by sampling and knot spans: scx edges are exact analytic curves or typed `Pending::Curve` (step 5); surfaces go through SU7 `recognize` (its tests) |
+| 43 | `a_big_arc_is_cut_where_it_meets_a_left_out_faces_box` | STEP5 | a freeform ("left-out") face: the pin says `uncertain` from samples, here the span is `Pending::Outline`/`Occluder` by name (HL2 §37.3) and the face `Unsupported(Freeform)`; the typed forms are tested in HL1 (`a_freeform_face_is_named_unsupported`); a hidden-line scene with a freeform occluder is open (needs a NURBS-face scene builder), and real answers wait on HL4/step 5 |
+| 44 | `narrow_torus_strips_keep_their_outline` | HL1 | covered by `tests/silhouettes.rs` (torus along and across the axis, patches, far from the origin) |
+| 45 | `mirrored_placements_bad_indices_and_bad_views_are_refused` | HL1 | covered by `tests/silhouettes.rs` (torus along and across the axis, patches, far from the origin) |
+| 46 | `cancellation_and_budgets_return_errors` | HL1 | covered by `tests/silhouettes.rs` (torus along and across the axis, patches, far from the origin) |
+| 47 | `two_touching_boxes_draw_each_shared_edge_once` | HL2 | ported by HL2 (74 §37.5) |
+| 48 | `a_cone_in_a_front_view_has_exact_outline_rulings_and_edge_on_circles` | HL1 | covered by `tests/silhouettes.rs` (torus along and across the axis, patches, far from the origin) |
+| 49 | `a_torus_seen_obliquely_spans_its_outer_diameter` | NEW | `pin_cases.rs` an_obliquely_seen_torus_spans_the_support_function (width `R |u_plane| + r`) |
+| 50 | `a_bent_quarter_in_a_knot_span_narrower_than_rounding_is_drawn` | DESIGN | recognising a NURBS arc as a circle by sampling and knot spans: scx edges are exact analytic curves or typed `Pending::Curve` (step 5); surfaces go through SU7 `recognize` (its tests) |
+| 51 | `an_unevenly_parameterised_circle_is_drawn_whole` | DESIGN | recognising a NURBS arc as a circle by sampling and knot spans: scx edges are exact analytic curves or typed `Pending::Curve` (step 5); surfaces go through SU7 `recognize` (its tests) |
+| 52 | `a_spline_off_its_circle_in_a_narrow_knot_span_is_not_taken_for_one` | DESIGN | recognising a NURBS arc as a circle by sampling and knot spans: scx edges are exact analytic curves or typed `Pending::Curve` (step 5); surfaces go through SU7 `recognize` (its tests) |
+| 53 | `nearly_coaxial_cones_far_out_keep_their_own_silhouettes` | NEW | `pin_cases.rs` cones_far_out_with_nearly_equal_axes (tilts 0 to 1e-3 at 3e5 mm) |
+| 54 | `nearly_coincident_cone_sectors_both_draw_their_outline` | HL1 | covered by `tests/silhouettes.rs` (torus along and across the axis, patches, far from the origin) |
+| 55 | `spherical_caps_through_one_circle_keep_their_own_outlines` | HL1 | covered by `tests/silhouettes.rs` (torus along and across the axis, patches, far from the origin) |
+| 56 | `cones_with_slightly_turned_axes_keep_their_own_outlines` | NEW | `pin_cases.rs` cones_far_out_with_nearly_equal_axes (tilts 0 to 1e-3 at 3e5 mm) |
+| 57 | `a_high_degree_spline_through_points_of_a_circle_is_not_taken_for_one` | DESIGN | recognising a NURBS arc as a circle by sampling and knot spans: scx edges are exact analytic curves or typed `Pending::Curve` (step 5); surfaces go through SU7 `recognize` (its tests) |
+| 58 | `the_shadow_index_finds_each_nearby_box_once` | DESIGN | the pin's chord grid, shadow index, trim samples, surface groups and scene limits do not exist: crossings are PL6's complete ones, spans are cut at them (HL2); HL2 has the kd-tree unit test |
+| 59 | `a_plane_through_three_points_draws_as_a_plane` | HL2 | ported by HL2 (74 §37.5) |
+| 60 | `a_plane_record_off_its_edges_by_rounding_still_hides` | HL2 | ported by HL2 (74 §37.5) |
+| 61 | `trim_samples_and_scene_extents_beyond_their_limits_are_refused` | DESIGN | the pin's chord grid, shadow index, trim samples, surface groups and scene limits do not exist: crossings are PL6's complete ones, spans are cut at them (HL2); HL2 has the kd-tree unit test |
+| 62 | `surface_groups_match_comparing_every_pair_and_preparing_can_be_cancelled` | DESIGN | the pin's chord grid, shadow index, trim samples, surface groups and scene limits do not exist: crossings are PL6's complete ones, spans are cut at them (HL2); HL2 has the kd-tree unit test |
+| 63 | `the_chord_grid_finds_what_a_scan_of_every_chord_finds` | DESIGN | the pin's chord grid, shadow index, trim samples, surface groups and scene limits do not exist: crossings are PL6's complete ones, spans are cut at them (HL2); HL2 has the kd-tree unit test |
+| 64 | `every_hole_of_a_plate_hides_the_same_part_of_its_bottom_circle` | OPEN | needs a body the testkit cannot build yet (a plate with circular holes, a sphere face with an inner loop, a wire edge, many placed bodies); for HL6's part list |
+| 65 | `coaxial_cylinders_seen_along_their_axis_draw_one_circle` | NEW | `outline.rs` coaxial_cylinders_seen_along_their_axis_draw_one_circle (images, `drop_coincident`: 8 arcs to 4) |
+| 66 | `a_few_hundred_placements_draw_as_one` | OPEN | needs a body the testkit cannot build yet (a plate with circular holes, a sphere face with an inner loop, a wire edge, many placed bodies); for HL6's part list |
+| 67 | `chords_only_near_each_other_still_meet_their_crossings` | DESIGN | the pin's chord grid, shadow index, trim samples, surface groups and scene limits do not exist: crossings are PL6's complete ones, spans are cut at them (HL2); HL2 has the kd-tree unit test |
+| 68 | `a_rigidly_placed_revolution_draws_as_the_cylinder_it_is` | DESIGN | surface recognition (torus or sphere stored as splines, form against label) is SU7 `scx_surface::recognize` and SP2b, tested there; HL1 has the rational cylinder |
+| 69 | `a_placement_that_is_not_rigid_is_refused` | DESIGN | worker threads, shared memo and serial/parallel equality: scx-hlr starts no threads and shares nothing; determinism is tested as the same bits twice (all three test files), stop and budget as typed errors |
+| 70 | `a_revolved_circle_is_a_torus_drawn_at_both_equators` | DESIGN | surface recognition (torus or sphere stored as splines, form against label) is SU7 `scx_surface::recognize` and SP2b, tested there; HL1 has the rational cylinder |
+| 71 | `an_edge_is_cut_to_its_interval_on_its_unbounded_curve` | HL2 | ported by HL2 (74 §37.5) |
+| 72 | `a_faces_chart_is_where_its_form_lies_on_its_label` | DESIGN | surface recognition (torus or sphere stored as splines, form against label) is SU7 `scx_surface::recognize` and SP2b, tested there; HL1 has the rational cylinder |
+| 73 | `a_form_turned_against_its_label_keeps_the_face_on_the_loops_side` | DESIGN | surface recognition (torus or sphere stored as splines, form against label) is SU7 `scx_surface::recognize` and SP2b, tested there; HL1 has the rational cylinder |
+| 74 | `a_sphere_with_an_inner_hole_loop_keeps_its_interior_and_outlines` | OPEN | needs a body the testkit cannot build yet (a plate with circular holes, a sphere face with an inner loop, a wire edge, many placed bodies); for HL6's part list |
+| 75 | `an_edge_no_face_uses_is_drawn_like_any_other` | OPEN | needs a body the testkit cannot build yet (a plate with circular holes, a sphere face with an inner loop, a wire edge, many placed bodies); for HL6's part list |
+| 76 | `a_traced_rim_is_drawn_on_the_true_intersection_or_refused` | DESIGN | a traced (sampled) silhouette: scx silhouettes are closed forms, freeform waits on HL4 |
+| 77 | `hlr_timing` | DESIGN | worker threads, shared memo and serial/parallel equality: scx-hlr starts no threads and shares nothing; determinism is tested as the same bits twice (all three test files), stop and budget as typed errors |
+| 78 | `permuting_or_removing_placements_moves_only_their_lines` | OPEN | needs a body the testkit cannot build yet (a plate with circular holes, a sphere face with an inner loop, a wire edge, many placed bodies); for HL6's part list |
+| 79 | `serial_and_parallel_work_draw_the_same_bits` | DESIGN | worker threads, shared memo and serial/parallel equality: scx-hlr starts no threads and shares nothing; determinism is tested as the same bits twice (all three test files), stop and budget as typed errors |
+| 80 | `placements_sharing_a_body_and_turn_draw_as_unshared_ones` | DESIGN | worker threads, shared memo and serial/parallel equality: scx-hlr starts no threads and shares nothing; determinism is tested as the same bits twice (all three test files), stop and budget as typed errors |
+| 81 | `budgets_hold_for_the_whole_call_on_any_number_of_threads` | DESIGN | worker threads, shared memo and serial/parallel equality: scx-hlr starts no threads and shares nothing; determinism is tested as the same bits twice (all three test files), stop and budget as typed errors |
+| 82 | `workers_poll_cancellation` | DESIGN | worker threads, shared memo and serial/parallel equality: scx-hlr starts no threads and shares nothing; determinism is tested as the same bits twice (all three test files), stop and budget as typed errors |
+| 83 | `a_failing_or_panicking_worker_stops_the_work_without_escaping` | DESIGN | worker threads, shared memo and serial/parallel equality: scx-hlr starts no threads and shares nothing; determinism is tested as the same bits twice (all three test files), stop and budget as typed errors |
+| 84 | `a_panicking_worker_stops_the_other_workers` | DESIGN | worker threads, shared memo and serial/parallel equality: scx-hlr starts no threads and shares nothing; determinism is tested as the same bits twice (all three test files), stop and budget as typed errors |
+| 85 | `scenes_and_trims_beyond_the_shared_limits_are_refused` | DESIGN | the pin's chord grid, shadow index, trim samples, surface groups and scene limits do not exist: crossings are PL6's complete ones, spans are cut at them (HL2); HL2 has the kd-tree unit test |
+| 86 | `long_items_poll_cancellation_inside_them` | DESIGN | worker threads, shared memo and serial/parallel equality: scx-hlr starts no threads and shares nothing; determinism is tested as the same bits twice (all three test files), stop and budget as typed errors |
+| 87 | `spline_points_and_hulls_come_from_their_own_knot_spans` | DESIGN | recognising a NURBS arc as a circle by sampling and knot spans: scx edges are exact analytic curves or typed `Pending::Curve` (step 5); surfaces go through SU7 `recognize` (its tests) |
+| 88 | `a_ball_corner_is_its_labels_sphere_and_needs_its_form` | DESIGN | surface recognition (torus or sphere stored as splines, form against label) is SU7 `scx_surface::recognize` and SP2b, tested there; HL1 has the rational cylinder |
+
+OPEN rows (a plate with circular holes, a sphere face with an inner loop, a wire edge, hundreds of
+placements, permuted placements) need testkit builders that do not exist; they go to HL6's part list.
+STEP5 rows need a freeform-occluder scene builder; the typed forms they would show are asserted in
+HL1's `a_freeform_face_is_named_unsupported` and in `nurbs_rims_and_freeform_faces_are_named_not_sampled`.
+
+### 43.6 Cost (release, one thread, loaded build host (load 25-37), throwaway timer over 500 calls, 4 views)
+
+| body | faces | edges | per call | per face | per edge |
+|---|---|---|---|---|---|
+| block | 6 | 12 | 77 us | 12.8 us | 6.4 us |
+| block 4x4 per side (generated) | 96 | 192 | 393 us | 4.1 us | 2.0 us |
+| holed slab, 6 sides | 15 | 39 | 104 us | 6.9 us | 2.7 us |
+| cylinder (made) | 3 | 3 | 134 us | 44.5 us | 44.5 us |
+| cone frustum (made) | 3 | 3 | 203 us | 67.8 us | 67.8 us |
+| cylinder, 8 walls | 10 | 24 | 330 us | 33 us | 13.7 us |
+| sphere, 8 lunes | 8 | 24 | 288 us | 36 us | 12 us |
+| torus, 4x4 patches | 16 | 32 | 1,116 us | 70 us | 35 us |
+| sphere, torus (made: seams only) | 1 | 2-3 | 0.1 us | | |
+
+Planar edges cost 2-6 us (inversions and `contains_uv` per span); a curved edge adds a plane
+intersection per splitting plane (one or two per face), 13-68 us. The pin's walk is 33 samples with
+bisections per edge, each an inversion. Numbers are a loaded host's; the ratios between rows are the
+signal. A new function: it adds nothing to an existing path (HL1's `silhouettes` is the same code
+moved into `Run::quadric` and `ruled_or_round`; its 18 tests pass unchanged).
+
+### 43.7 Deviations and open questions
+
+- 74 §5.3 had `outline(body, plane, cx) -> Vec<Curve2>`. Here the stretches are 3-D edge ranges, and
+  `images` gives the planar curves for a view (a plane is a view: `View::new(normal, up)`).
+- Silhouettes of curved faces are not in `outline`: they are `silhouettes` (HL1), as in the pin's
+  split; a caller wanting the whole outline drawing joins them.
+- NURBS edges, torus edges that are no meridian or parallel, and unrecognised NURBS faces wait on
+  step 5 (`Cuts`, `Face`).
+- Open: the lean step is one constant (`STEP` of the face's size). A proof that needs none is the sign
+  of the derivative of `n . v` into the face (the shape operator); not done.
+
+### 43.8 Proposed 04 row
+
+HL3 (74 §43): `scx_hlr::outline(&Brep, &View, cx)` gives the stretches of each edge between a face that
+faces the viewer and one that does not, with exact cuts: a face's state along an edge changes only
+where the edge meets the face's silhouette plane (cylinder, cone, sphere) or a torus meridian's or
+parallel's closed-form angle (`intersect_curve`), and one point per span decides it (a face edge-on at
+the edge is asked a hair inside, on the side proved inside). The pin's 32 samples miss a sliver of a
+32nd of an edge. Freeform faces, NURBS edges, edges of more than two uses and unplaced points are typed
+per edge. Images are exact `Curve2` pieces and `drop_coincident` draws coincident ones once; the pin's
+tidying of sampled and spline images is not ported (nothing is sampled). Of the pin's 88 hlr tests: 21
+were ported by HL1 and HL2, 11 are ported or covered here against closed forms, 42 test mechanisms scx
+does not have (chords, knot-span racing, workers, labels), 9 wait on freeform faces (typed `Pending`),
+5 need builders.
+
+## 44. BW8 as built (11-28)
+
+`scx_bodyq::pick_at` (faces, edges or vertices within an aperture of points) and
+`scx_bodyq::still_names` (which entities of a body a stored reference still names), in
+`crates/scx-bodyq/src/pick_at.rs` and `still.rs`. Both are reads: `&Brep`, `&mut Budget`,
+`&Stop` (no memo, so no `&mut Cx`, which 74 §2.3 reserved for memo-keeping queries).
+
+```rust
+pub fn pick_at(body: &Brep, points: &[Point3], want: EntityKind, aperture: Length,
+               budget: &mut Budget, stop: &Stop) -> Result<Vec<Vec<Picked>>, BodyqError>;
+pub struct Picked { pub entity: Entity, pub distance: f64, pub at: Point3 }
+
+pub fn still_names(body: &Brep, stored: &[Stored], history: &[Step<'_>],
+                   budget: &mut Budget, stop: &Stop) -> Result<Vec<Standing>, BodyqError>;
+pub struct Stored { pub entity: Entity, pub at: Point3 }
+pub enum Step<'a> { Edit(&'a Changes), Compact(&'a IdMap) }
+pub enum Standing { Names(Vec<Entity>), Moved(Vec<Entity>), Gone }
+```
+
+New refusals: `BodyqRefusal::NotPickable { kind }` (a region or shell), and defect
+`BodyqDefect::NoUvSide { face }` (a face whose boundary cannot say which side a uv is on; the
+pin's `on_entity` treats that as "not on", which is a silent default).
+
+### 44.1 `pick_at`
+
+- **Every hit within the aperture**, sorted by (distance, entity id), one answer per point. The
+  pin's nearest-or-`Ambiguous` and its first-miss stop are gone: a point that picks nothing is
+  an empty answer and the next point is read. 74 §2.3's "error where two are" is not kept,
+  because two entities within the aperture is the ordinary case (a point on an edge is on two
+  faces), and the caller chooses.
+- **Distance is to the entity as trimmed.** An edge: the curve's foot when it lies in the
+  interval, else the nearer end (a collapsed edge is its vertex). A face: the surface's foot when
+  its uv is `Inside`, else the nearest point of the face's edges (and the foot too when its uv is
+  only `Near` the boundary, which can differ from the trimmed distance by less than the boundary
+  tree's width). The pin did the same through `face_closest_point_in_shape`. Test: a point 1 off
+  the rim of a cube face in its plane picks that face at 1.0, not 0.
+- **Reach** is the aperture plus the entity's coincidence (resolution and recorded accuracy), so
+  an aperture of zero still picks the entities a point is on. No tolerance parameter beyond the
+  aperture; no `MAX_TOLERANCE`.
+- **Candidates** come from one `Brep::faces_meeting` window of each point grown by the aperture
+  (the box tree BW2's `tight_box` and `classify_point` use; boxes are grown by accuracy and the
+  resolution, so nothing within reach is missed). Faces are the hits for `Face`; edges and
+  vertices are those of the faces found, plus the shells' wire edges and lone vertices, which
+  no face names and which are read in a scan over the shells (linear in them; a body of many
+  wires would want a tree, none exists yet).
+- **Deterministic**: ids in `BTreeSet`s, sort by `total_cmp` then `Entity`'s order; the same
+  body and points charge the same work (tested).
+- **Faces of the pin not ported here.** `face_at` is `classify_point` returning `On(Face)`
+  (already built; on an edge it is `On(Edge)`, as the pin's "picks none"). `faces_on_one_surface`
+  (grow picks across edges where the faces continue one surface with the same outward side) is
+  not in this row's two functions; BW4's `continuity` proves the order of contact across an edge
+  and could drive it, but "one surface" is a stronger claim than G-order and needs its own rule
+  (proposed BW8b; open, §44.6).
+
+### 44.2 `still_names`: what the Brep carries, and what it does not
+
+- The Brep carries **ids**: dense, never reused along a body's line of descent, renumbered only
+  by `compact` (which returns an `IdMap`). It carries **no history**: what became of each entity
+  is `Changes`, returned by `Draft::finish` and declared by the operation (`derive`, `merge_*`,
+  `coincident`), and `carry` is the one rule that takes an application's data across it (01 §2.6).
+  `scx-fates` (which will store the chain) is not built.
+- So the caller gives the **steps** from the earlier body to this one (`Step::Edit(&Changes)`,
+  `Step::Compact(&IdMap)`, in order; none for the same body) and `still_names` reads the
+  descendants of each stored id with `carry` itself, over a table of `()` with a rule that keeps
+  every value through split, merge and coincidence and drops an offset (an offset is not the
+  entity). No parallel naming scheme: a kept entity is its own descendant, a split's pieces and a
+  new entity descend from the origins the operation declared, a survivor takes in what it
+  absorbed, a removed entity has none.
+- Then the geometry decides, per live descendant: the stored point must lie on it within the
+  entity's own coincidence (face: trimmed distance as in 44.1; edge; vertex).
+  `Names(entities)` are the descendants carrying the point (ascending; two for a point on the
+  shared edge of two pieces); `Moved(descendants)` are descendants none of which carries it;
+  `Gone` has no live descendant.
+- The pin's allowance (a thousandth of the body diagonal, at least 1e-3 and the record's
+  tolerance) is not ported: it scaled with the body and passed a point 0.01 off a 3 x 4 x 12 box.
+  The only slack is the entity's coincidence, a distance the document sets.
+- `at` is in the coordinates of the body read against. A caller that moved the body (a
+  translation) moves the points by the same map; one that does not gets `Moved`, which is the
+  true answer (the entity is there, the point is not on it).
+
+### 44.3 Cases for and against
+
+- *Lineage by `carry` over geometry by nearest.* For: ids and declared origins are exact and
+  need no tolerance; a point near two entities cannot swap them (the pin's `stored_*` also never
+  substituted a nearest, by design). Against: where an operation did not declare lineage
+  (a face remade `Free`), the reference is `Gone` though geometry sits where it was. `Gone` means
+  "no declared descendant", not "nothing is there"; the geometric fallback (`pick_at` at the
+  point) is one call for a caller who wants it, and is deliberately not folded in.
+- *A `Step` slice on the call, not history in the Brep.* For: no new state in `Brep` (a body is a
+  value), no dependency on the unbuilt `scx-fates`, any chain works (several edits, a compaction).
+  Against: the caller keeps the `Changes`; a missing or misordered step gives wrong answers
+  silently. `scx-fates` will own the chain and call this with it.
+- *Three outcomes, not a bool.* `Moved` tells a stale point from a deleted entity. Against: the
+  pin's `bool` was enough for its caller; the caller here matches three arms.
+- *Same-kind lineage only.* `carry` tracks faces, edges and vertices apart, so an edge reference
+  is not followed through its face's split. For: that is what `Changes` records. Against: an
+  edge cut by a face split with no `Origin::Edge` declared reads `Gone`.
+- *`pick_at` returns the trimmed distance, not the surface's.* For: what a user means by "near
+  a face". Against: the foot is the surface's one nearest point; a surface with a second local
+  minimum inside the face (a torus, for a point inside its hole) can read farther than the face
+  is. Plane, cylinder, cone and sphere have none.
+
+### 44.4 Tests (`tests/pick_at.rs` 9, `tests/still_names.rs` 6)
+
+Truth is closed form on the unit cube and the world cylinder (radius 1.2, height 2.5), and
+constructed lineage on real edits.
+
+- `pick_at`: a point on a cube face picks that face at 0; a point on an edge picks the edge, both
+  faces at 0, no vertex at aperture 0 and both ends at 0.5 at aperture 0.5, and five edges
+  within 0.5 (the one and the four that meet its ends); (0.05, 0.15, 0.1) at aperture 0.2 gives
+  faces x = 0, z = 0, y = 0 at 0.05, 0.1, 0.15 in that order; every kind at several apertures is
+  sorted by (distance, id); a point 1 past a face's rim picks it only at aperture 1; a point
+  0.3 off a cylinder's wall picks the wall at 0.3, a point 0.3 past the rim above the cap picks
+  cap and wall at 0.3 each; a miss is an empty answer and the batch goes on; the same picks give
+  the same hits and work; an exhausted budget is an error; non-finite points, bad apertures and a
+  region or shell refused.
+- `still_names`: against its own body a point names the entity it is on, `Moved` when it is on
+  the plane but past the trim or on another face, `Gone` for an id the body never had; edges
+  and vertices likewise; a translated cube (a real `Draft::transform`, every record replaced)
+  keeps every reference when the point moves with it and reads `Moved` when it does not; two
+  cubes in two shells, one removed whole by an edit (faces, edges, vertices, shells, region):
+  every reference to the removed lump is `Gone`, every one to the kept lump is named, both ways
+  round, then through `compact`, where the kept lump's references follow the `IdMap` (and
+  without the compaction step they do not); a cube rebuilt by an edit that `derive`s two new
+  faces from one old face: the point on one piece names that piece, on the shared edge both, on
+  neither `Moved` (both), twin faces one each, entities not derived `Gone`; a hand-written
+  `Merge` takes a reference to an absorbed face to the survivor.
+- Removed from the pin: nothing ported by name. The pin's `stored_face` tests (0.01 off accepted,
+  0.02 refused by the diagonal allowance) are not ported, since the allowance is not (44.2); its
+  `nearest`-rule unit test (ambiguity within the body's tolerance) is not, since there is no
+  `Ambiguous`.
+- `Builder` in `tests/common` gains `extend`, `new_solid`, `cube` and `Lump`; `face` and
+  `polygon` return the `FaceId`.
+
+### 44.5 Cost (throwaway instrumentation, release, one core; none committed)
+
+Face centres of a testkit block as the points, aperture in fractions of the body's box
+diagonal. "Tree" is `faces_meeting` calls (one per point); "faces" the faces its window returned
+per point; "inv" the inversions charged per point (budget units).
+
+| body | faces | aperture | tree/pick | faces/pick | inv/pick (Face) | us/pick (Face, Edge, Vertex) |
+|---|---|---|---|---|---|---|
+| Block 5 | 150 | 0 | 1 | 1.0 | 1.0 | 0.5, 0.5, 0.4 |
+| Block 10 | 600 | 0 | 1 | 1.02 | 1.08 | 0.4, 0.3, 0.3 |
+| Block 10 | 600 | 0.029 | 1 | 1.20 | 1.8 | 0.4, 0.4, 0.4 |
+| Block 10 | 600 | 0.294 | 1 | 18.6 | 87.6 | 5.1, 4.9, 4.7 |
+| Sphere 16 | 16 | 0.064 | 1 | 9.5 | 26.5 | 4.2, 2.3, 1.6 |
+
+So a pick is one box-tree query and reads the faces whose boxes meet the window (about one of
+600 at a point on a face), not all of them: the pin's `faces` solved the closest point on every
+face, O(F) per point. At an aperture of 0.29 of the diagonal on a 600-face block the window holds
+18.6 faces and a face pick charges 87.6 units (each window face, plus a boundary read for each
+whose foot is outside it); that is the cost of the answer asked for (8,440 hits for 600 points).
+
+### 44.6 Open
+
+1. `faces_on_one_surface` is not built (44.1). Proposed BW8b: grow across an edge when the faces
+   share one analytic surface within coincidence and have the same outward side, using BW4's
+   proved order for the rest; needs a ruling on "one surface".
+2. A face whose surface has two local minima of distance inside it (a torus for points in the
+   hole) may be read too far (44.3).
+3. NURBS edges are `Unsupported(Nurbs)` as in `classify_point`; NURBS faces are not yet reached by
+   `face_foot`'s inversion either (step 5).
+4. Lineage is as complete as the operation's `derive` calls. An operation that remakes entities
+   `Free` makes its references `Gone`. A test per operation (BO, MK) belongs to those crates.
+5. `scx-fates` should wrap the chain of `Step`s so a caller does not keep `Changes`.
+6. Wire edges and lone vertices are scanned, not tree-queried.
+
+### 44.7 Proposed 04 row
+
+| 11-28 | (For the owner's review) BW8: `pick_at` returns every face, edge or vertex within an aperture of each point sorted by (distance, id), one answer per point (the pin's nearest-or-`Ambiguous` and first-miss stop dropped), the distance to the entity as trimmed, candidates from one box-tree window per point (about 1 of 600 faces read at a point on a face); `still_names` finds the descendants of a stored reference by `carry` over the edits' `Changes` and `IdMap`s (no parallel scheme, the caller gives the steps) and checks the point lies on each within the entity's coincidence: `Names`, `Moved` or `Gone`; the pin's allowance of a thousandth of the body diagonal is not ported; `faces_on_one_surface` is left open (BW8b) | bodyq (none new) | 74 §44 |
+
+
+## 45. BW9 as built (11-28)
+
+The query and measure map (§1.3): one line per pin function of `query.rs` and the non-mass half
+of `measure.rs`, to the scx function that answers it, and the functions that had none, ported.
+Branch `bw9`; new files `crates/scx-bodyq/src/reads.rs`, `crates/scx-planar/src/polyline.rs`,
+tests `crates/scx-bodyq/tests/reads.rs`, `crates/scx-planar/tests/polyline.rs`. No new Cargo edge.
+
+### 45.1 The map
+
+"new" = ported here; "exists" = already in scx; a row name = built by that task or waiting on it.
+
+| Pin function | scx function | Status |
+|---|---|---|
+| `Query::new`, `record` | the `&Brep` itself (cells fill on first read) | exists |
+| `Query::edge_at(e, t)` (`None` for a traced curve) | `scx_bodyq::edge_at`: point and first derivative; every curve has a jet, a collapsed edge is `Refused::Collapsed` | new |
+| `Query::edge_interval` | `Edge::shape()`, `EdgeShape::Curve { interval }` | exists |
+| `Query::edge_faces` | `Edge::uses()`, then `Use::lp().face()` | exists |
+| `Query::edge_points(e, sag)` | `scx_tess::sample_edge(edge, &TessSpec, ..)` (a sagitta bound, not a sample) | exists |
+| `Query::outline_stretches` | hlr `outline` | HL3 (not on this base) |
+| `Query::edge_distance(e, p, sag)` | `edge_distance`: closed-form foot and both ends, no sag | new |
+| `Query::face_uv(f, p, accept)` | `face_uv` (foot, uv, gap, side; the caller compares the gap); `FaceSurface::closest_point` is the same foot | new |
+| `Query::face_normal(f, uv)` | `outward_normal` (out of the material, by the regions); `FaceSurface::normal` for the natural one | new |
+| `Query::face_contains` | `face_contains`: gap within the face's coincidence and `Inside`, or an edge within its coincidence | new |
+| `Query::faces_at` | `faces_at`: box prefilter, nearest first, ties by id | new |
+| `Query::faces_against` | `faces_against`: the same vote, over `faces_at` and `outward_normal` | new |
+| `Query::ray` | `pick` | BW5 (`rays::cast` is its building block) |
+| `locate_points`, `classify_point(s)` | `classify_point` (the caller loops; each call is deterministic) | exists |
+| `classify_points_with_normals`, `face_normal_at_point`, `face_normal_at_edge` | `classify_point`, then `face_uv` and `outward_normal` (the caller composes) | exists + new |
+| `levels_along` | `round_face::extent_in` with a `SeatFrame` (body moved rigidly into the frame, `tight_body_box`) | exists (BW11) |
+| `edge_face_gap_samples`, `edge_face_largest_gap` | `scx_surface::gap` (`curve_surface_gap`, `pcurve_edge_gap`): certified brackets. The pin's own note says the largest sample is not the largest gap, so no sample list is ported | exists (SU6) |
+| `points_meet` | `scx_surface::points_meet` | exists (SU8) |
+| `point_distance`, `box_max_distance_to_point`, `point_along_line`, `unit_direction`, `vertex_distance` | `Point3::distance`, `Extent3d::max_distance_to_point`, `Point3 + Vec3 * t`, `Vec3::length_and_unit`, `Vertex::point().distance(p)` | exists (scx-num, scx-brep) |
+| `nearer_line_meeting` | folded into `face_line_nearest` (the same tie rule: ahead) | new |
+| `distance_across_surface` | not ported: three lines of arithmetic (`along . n` of the foot's normal) with an absolute `1e-24`; no caller in scx | not ported |
+| `turn_to_parallel` | `turn_to_parallel(axis, normal, line, &Near)`: typed `ParallelTurnError`, the pin's `1e-6` and `1e-9` become coincidence over a reach | new |
+| `edge_closest_point` | `edge_closest_point`: point, parameter, distance | new |
+| `edge_closest_to_ray` | `pick` (edges within the aperture of the ray) | BW5 |
+| `face_hit_by_ray`, `face_hits_by_ray`, `fire_ray` | `pick` (every hit within the aperture, by (depth, id)) | BW5 |
+| `face_line_hits`, `face_line_nearest` | `face_line_hits`, `face_line_nearest`: `intersect_curve` of the line over the box's reach, uv `Outside` dropped | new |
+| `edge_curve` | `EdgeShape::Curve { curve, interval }` | exists |
+| `closest_to_point` (`closest_to_members`) | `closest_to_point(faces, edges, p)` with `Nearest::exact` | new |
+| `closest_to_curve` | not ported: a distance from a curve to a trimmed face is a bracket; the route is `contact` (BW3) on a wire body | open (45.5) |
+| `closest_faces` | `contact` (BW3) | BW3 |
+| `face_distances`, `face_surface_gaps`, `face_distances_within` | `closest_to_point` with one face; `face_uv` gap; `Brep::faces_meeting` plus `closest_to_point` | new / exists |
+| `rim_edges` | `rim_edges`: a face of the set on one side, one outside it on another; a seam is not a rim | new |
+| `outline_cuts` | hlr `outline` | HL3 |
+| `adjacency`, `face_loops`, `edge_samples`, `edge_points(count)`, `edge_middle` | `Edge::uses`, `Vertex::edges`, `Face::loops`, `Curve::eval_many` over the interval, `edge_at` at its middle | exists |
+| `face_area`, `edge_length`, `face_centroid`, `mass_properties`, `area` | `scx_mass` | MA rows |
+| `point_on_face` | `face_contains` | new |
+| `face_plane_normal`, `face_square_level`, `face_straying` | `outward_plane`, `is_square_plane_at_height` / `is_face_on_plane`, the stray inside `recognize` | exists (BW11, BW6) |
+| `bounds` | `tight_body_box` (certified, `&Brep`) | exists (BW2) |
+| `is_manifold_solid`, `check_solid`, `solid_count` | `check` (CF1), `Brep::regions` | exists |
+| `rim`/`adjacency` helpers `outer_faceuse` | `outward_normal`'s front/back regions | new |
+| `polyline_2d_bounds` | `Extent2d::hull` | exists |
+| `point_displacement` | `Point2 - Point2` | exists |
+| `centroid_and_mean_radius` | `scx_num::math::centroid_and_mean_radius` | exists |
+| `segment_2d_intersection` | `scx_planar::crossings` of two lines (every meet and overlap, certified) | exists (PL6) |
+| `polyline_2d_crossings` | `scx_planar::polyline_crossings`: every meet and overlap of each segment pair with the segments' indices | new |
+| `polyline_2d_closest_point` | `scx_planar::polyline_closest`: distance, point, segment, parameter | new |
+| `tangent_contact_line_circle_2d` | `scx_planar::tangent_segment_circle` | new |
+| `tangent_contact_circle_circle_2d` | `scx_planar::tangent_circles` | new |
+
+### 45.2 Decisions
+
+- **No `accept` or `tol` argument.** The pin's queries took a caller tolerance; here the length
+  is the face's or edge's coincidence (`coincident` of the resolution and the entity's accuracy),
+  as `classify_point` reads it. For: one rule, no caller choosing a number the body already
+  has. Against: a caller who wants a looser pick loses the knob. It gets it from `pick`'s
+  aperture (BW5), the one place that is about looseness.
+- **`closest_to_point` says when it is only a bound.** A face's nearest point is the surface's
+  foot when it is inside the face. When it is not, the nearest boundary point is the answer for
+  a plane (the distance is convex) and an upper bound for any other kind, since another local
+  minimum of the distance may lie inside the face; `Nearest::exact` says which. The pin gave one
+  number either way. Cases against `exact` for cylinders and spheres: the distance there has one
+  minimum off the axis, so the flag is conservative; proving it needs the axis test, left open.
+- **`face_contains` on an undecided boundary** (`contains_uv` is `None`) counts only by edges,
+  as `classify_point`'s step 1 does.
+- **Planar tangents are closed forms on the resolution**, not `crossings`: a whole circle is not
+  a `Curve2`, and a tangency is a closed form of the foot. A segment's end on the circle is a
+  crossing, not a tangent (the pin returned it); equal circles have no contact point (pin: also
+  `None`).
+- **`levels_along`, `bounds`, `classify_point(s)` are not re-ported.** They exist under other
+  names; porting a second copy would split the truth.
+
+### 45.3 Tests (against closed forms, not pin output)
+
+`tests/reads.rs` (13): a cylinder's rim at four angles (radius 3, derivative length 3, square to
+the radius), edge distance over the middle (5) and past an end (3), `edge_closest_point` and its
+parameter round trip, a block top's foot gap 0.5 / side `Inside` / `Outside`, `face_contains`
+including an edge, `faces_at` on a face, a corner (three faces by id), the air and the inside,
+the outward normal of all six block faces, `faces_against` with and against a run, the closest
+member (foot 5, plane boundary sqrt 50, edge against face), a cylinder wall level (17, exact) and
+above its rim (sqrt 298, `exact` false), a line through the top (t = 4) and along it (none),
+a line through a cylinder's axis (t = -3 and 3, the tie goes ahead, the nearer behind wins), the
+rim of one, two, three faces, all faces and the wall (2 rims, seam not a rim), `turn_to_parallel`
+at 0, pi/4, -pi/4, pi/2 (both senses), unit and non-unit vectors, three refusals, and the reach
+scaling. `tests/polyline.rs` (7): zigzag against a line (meets at (1,1) and (3,1), segment
+indices), misses and short polylines, a shared stretch as an `Overlap`, a zero-length segment
+refused, nearest points (end, interior, single point, empty, NaN), tangent segment and circle
+(tangent at (0,2); crossing, missing, foot off the end, refusals), circles outside (1,0), inside
+both orders (3,0), and none for crossing, apart, nested, equal.
+
+### 45.4 Cost
+
+Nothing existing changed; the new functions are leaf reads that add no work to any existing call.
+`closest_to_point` does one foot per face and one per boundary edge of a face whose foot is
+outside it (a block face: 4 edge feet, each one budget unit).
+
+### 45.5 Open questions
+
+1. `closest_to_curve` and `closest_faces` wait on `contact` (BW3); until then they have no scx
+   function. Is a wire-body probe for `contact` the right shape for a curve probe?
+2. `Nearest::exact` for a cylinder, cone or sphere off the axis: prove it, so the common case is
+   exact.
+3. `faces_against`'s vote is the pin's heuristic (a sum of dot products). With regions known, a
+   caller extruding a sheet might ask the material side directly; kept for the pin's caller.
+
+### 45.6 Proposed 04 row
+
+| 11-28 | (For the owner's review) BW9: the query and measure map (74 §45): every `query.rs` and non-mass `measure.rs` pin function has a line naming its scx function. Ported (`scx_bodyq`): `edge_at`, `edge_distance`, `edge_closest_point`, `face_uv`, `outward_normal`, `face_contains`, `faces_at`, `faces_against`, `closest_to_point` (`Nearest::exact`), `face_line_hits`, `face_line_nearest`, `rim_edges`, `turn_to_parallel` (against a `Near`, typed `ParallelTurnError`); (`scx_planar`) `polyline_crossings`, `polyline_closest`, `tangent_segment_circle`, `tangent_circles`. No `accept`/`tol` parameter: coincidence of the entity. The rest map to existing functions or to BW3, BW5, HL3. Closed-form tests (20). No new Cargo edge. |
+## 46. BW8b as built (11-28)
+
+`scx_bodyq::faces_on_one_surface`, the one entry of the 74 §1.3 ledger that §44 left open, in
+`crates/scx-bodyq/src/one_surface.rs`. ST5's one-plane proof (§42.5) moves down to
+`scx_surface::plane_bound` (`crates/scx-surface/src/one_plane.rs`) and both crates call it. 9
+tests in `crates/scx-bodyq/tests/one_surface.rs`, 5 unit tests moved with the proof; nothing
+removed.
+
+```rust
+pub fn faces_on_one_surface(body: &Brep, seeds: &[FaceId], keep: &[EdgeId],
+                            budget: &mut Budget, stop: &Stop) -> Result<OneSurface, BodyqError>;
+#[non_exhaustive] pub struct OneSurface { pub faces: Vec<FaceId>, pub stopped: Vec<Stopped> }
+#[non_exhaustive] pub struct Stopped { pub edge: EdgeId, pub from: FaceId,
+                                       pub to: Option<FaceId>, pub why: NotCrossed }
+#[non_exhaustive] pub enum NotCrossed { Fins(usize), Shells, Sense, Surface(NotOneSurface) }
+#[non_exhaustive] pub enum NotOneSurface { Kind, Crease, Opposite, Apart(Length), NoBox }
+
+// scx-surface
+pub const CREASE: f64 = 1.0e-3;
+pub fn plane_bound(a: &Plane, b: &Plane, bx: &Extent3d) -> Result<f64, NotNear>;
+#[non_exhaustive] pub enum NotNear { Crease, Opposite }
+```
+
+### 46.1 The layer question
+
+`scx-stitch` depends on `scx-bodyq` (ST3), so `scx-bodyq` cannot call `merge.rs`. The proof is a
+function of two `Plane`s and a box, so it moves to `scx-surface`, the lowest crate both reach
+(`Plane` and `Extent3d` are already there; `scx-brep` is not needed, the face's box is the
+caller's). No new Cargo edge anywhere. In `merge.rs` `plane_deviation`, `CREASE` and the unit
+tests are gone; `plane_against` calls `plane_bound` and maps `NotNear::Crease` to
+`NotOneSurface::Kind` (a crease is still not reported by `merge_faces`) and `Opposite` to
+`Opposite`, so ST5's answers and bits are unchanged: its 15 `sew` tests and the unit tests pass,
+the four moved unit tests (same plane on another frame 0, offset, tilt, opposite) and one new
+one (a right angle is a `Crease`) now sit with the function. The order is as ST5's: crease
+first (sine above 1e-3, whichever way the normals point), then opposite.
+
+### 46.2 Decided: the API
+
+"One surface" is ST5's, as the coordinator ruled (04, BW8): surfaces `==` are one surface (a
+cylinder split into faces); two planes are one when each face's box is within
+`Resolution::approx` of the other's plane (`plane_bound` both ways, the larger reported);
+anything else is `Kind`. The shape of the answer was the choice.
+
+| Choice | For | Against |
+|---|---|---|
+| **Grow from seeds across edges** (taken; the pin's `faces_on_one_surface(order, faces, keep_edges)`) | The pin's own use: a click names a face, the application wants the face it belongs to; faces on one surface that do not touch are two places, not one; reads only edges, never a pair of faces that share none (2 pairs a face, as ST5); `keep` is the pin's split line to leave alone; the stopping edges are free to report | A caller who wants every group calls once per unassigned face (each call re-proves its own wall; total work stays 4 units a face) |
+| Group all faces (`-> Vec<Vec<FaceId>>`) | One call for a whole body | Answers a question nobody has asked yet; no `keep`; a caller wanting one face's wall pays for all; the same work as growing from every face with the cache shared, so it can be added over this function later with no change to it |
+| Face against face (`one_surface(a, b) -> Result<(), NotOneSurface>`) | Smallest | Does not say that the faces touch or that the outward side continues; the caller rebuilds the growth |
+| Same surface anywhere in the body (all faces with `==` or near surface) | Finds a hole's wall across a gap | Not what the pin did; two distinct pockets on one plane are two surfaces to a user |
+
+An edge leads from a face to the one across it only if every one of these holds, each a typed
+reason when it does not (`Stopped`, once per edge, the first reached face named):
+
+- a curve edge of exactly **two fins** on two different faces (`Fins(n)` for one fin, a wire
+  edge, or three or more: a partition between solids is not crossed). A seam (one face twice) and
+  a collapsed pole edge are not edges between faces and are not listed;
+- the two faces bound the **same shells** (`Shells`: the record's `sides`, as ST5);
+- the fins run **opposite senses**, so the outward side continues (`Sense`);
+- the faces are **on one surface** (`Surface(why)`).
+
+This is the pin's rule (an edge of the face, the face across, `Continues::Proved`) with ST5's
+proof in place of the pin's G-continuity test: a rounded block's tangent faces are not one
+surface and are not grown here; the caller who wants a smooth face chain uses
+`tangent_all_along`/`continuity` (BW4) over the same edges.
+
+Adversarial pass on the result:
+
+- *Order.* Seeds first, deduplicated, in the order given; then faces as reached (breadth first,
+  each face's edges in its use order). Deterministic, and the pin's order. A caller who wants id
+  order sorts. A test checks the same call gives the same answer and work.
+- *A face reached across one edge and refused across another.* Fine: each edge is decided once
+  and the proof is symmetric (both directions), so whichever face reaches it first gives the
+  answer. The face is in if any path of proved edges leads to it.
+- *Chains.* A row of planes each within `approx` of the next but drifting would add up if the
+  proof were pair against pair. It is: growth follows edges, each proved against the neighbour
+  only. ST5 avoids this by proving every member against the group's one plane. Here no plane is
+  made, so the risk is real, and the cost of fixing it is a second pass (prove each face
+  against the seed's surface). Left as the pin has it and listed as an open question (46.5.1);
+  the walls of a body that came from a real part are `==` or exact.
+- *Crossing at a crease with no reported reason.* `merge_faces` hides creases (it reports
+  near misses); here every edge that stops the growth is listed, a crease as `Crease`, so a
+  block wall lists its `4n` rim edges. They cost one proof each.
+  A caller filters on `why`.
+- *Planes facing each other.* `Opposite` is reachable only where `Sense` already passed: two
+  planes of opposite normals whose fins run opposite senses are a face whose surface was turned
+  over without turning its loops, which `check` reports as a body fault. Not built as a body
+  test (no valid body has it); the function is tested on the planes (`opposite_normals_are_opposite`).
+- *Non-plane kinds.* A quadric on another frame is `Kind`, as ST5 says (46.5.2). `==` is the
+  only proof for them. Procedural and NURBS surfaces are `==` or `Kind`: no `Unsupported`, as
+  nothing is read from them.
+- *A face with no box* (`NoBox`): a face reaching infinity cannot be boxed; typed.
+
+### 46.3 Tests (closed forms; no pin output)
+
+1. `a_subdivided_block_grows_to_its_six_walls`: blocks of 2, 3, 5 steps (seeds 0 to 3, each face
+   on its own frame, 24 to 150 faces), growing from every unassigned face gives six walls of
+   `n^2` faces, every member on one plane (normals and offsets to 1e-9), no face twice, the `4n`
+   rim edges each `Surface(Crease)`, and the work exactly `4 n (n + 1)` units a wall.
+2. `a_cylinder_split_into_faces_grows_to_its_wall`: cylinders of 2, 3 and 7 wall faces grow from
+   one to all `n`, and the `2n` cap arcs stop it as `Surface(Kind)` (a cylinder is not a plane).
+3. `a_cylinder_on_another_frame_is_not_proved`: the wall moved 0.25 along its axis is the same
+   surface in space and not `==`: typed `Kind` (the two edges into it, and the cap arcs), and
+   its neighbours, which are `==`, still join.
+4. `near_misses_are_measured_against_the_resolution`: a face moved 0.4 approx along its normal
+   stays in its wall; one tilted 0.3 approx stays; one moved 1.6 approx (past `approx`, under
+   the zone that `finish` accepts; the pcurve writer refuses beyond `approx`, §39.3.1, so the
+   body keeps its pcurves) is alone and its two inner edges are `Apart` with the bound, 1.6 approx
+   to 1% (a pure offset is its own bound).
+5. `an_edge_kept_is_not_crossed`: the two split lines of a quadrant, kept, leave the seed alone
+   and are not reported.
+6. `an_edge_of_three_faces_is_not_crossed`: stacked blocks, edges of three fins are `Fins(3)`
+   with `to: None`.
+7. `seeds_come_first_and_are_not_repeated` (order, duplicates, the same call twice the same
+   answer and work, no seeds no growth), `a_seed_the_body_does_not_hold_is_refused`
+   (`NoEntity`), `a_small_budget_is_exhausted_and_leaves_nothing`.
+8. In `scx-surface`: the plane bound on another frame (<1e-15), a parallel offset (the offset to
+   1e-12), a tilt (1x to 1.5x the angle over the extent), opposite normals, a right angle.
+
+The pin's test (`a_pick_grows_across_a_split_line_but_not_a_kept_one`: a cube whose top is
+split in halves, a half grows to the other and to nothing across the box's edges, and with the
+split line kept it stays alone) is the first and fifth tests on the testkit's block, whose
+walls of 2 steps are four quadrants (the box's edges stop as `Crease`, the kept lines as
+nothing).
+
+### 46.4 Measured (throwaway timer and the budget's own count; not committed; release build)
+
+Growing one wall of a subdivided block, and growing from every face:
+
+| steps | faces | wall faces | work, one wall | per wall face | one wall | all faces as seeds: work | time |
+|---|---|---|---|---|---|---|---|
+| 2 | 24 | 4 | 24 | 6.0 | 82 us | 96 | 85 us |
+| 5 | 150 | 25 | 120 | 4.8 | 162 us | 600 | 418 us |
+| 10 | 600 | 100 | 440 | 4.4 | 480 us | 2,400 | 1.8 ms |
+| 20 | 2,400 | 400 | 1,680 | 4.2 | 1.7 ms | 9,600 | 7.7 ms |
+
+Four units a face: each edge is read once (2 edges a face, one unit) and proved once (one unit);
+that is ST5's 2 candidate pairs per face, and the proof calls are `plane_bound` twice per pair. No
+face pair that shares no edge is read. Time is linear, 3 to 4 us a face at 10 steps and up (boxes and proofs; the
+smaller bodies carry the fixed cost of the first box read). Nothing is added to any
+existing path: `merge_faces` makes the same calls to the same arithmetic (its 15 `sew` tests
+and its recipe tests unchanged).
+
+### 46.5 Open
+
+1. A chain of planes each within `approx` of its neighbour but drifting is grown through (46.2).
+   `merge_faces` prevents it by proving each member against the group's one plane. A second
+   pass here, proving every face of the grown set against the seed's surface, would cost one
+   more proof a face and refuse the drift; not built because a body whose own faces drift is
+   already `check`'s to flag and the growth of the pin was by neighbours.
+2. Quadrics on different frames (cylinder, cone, sphere, torus) and opposite-sense planes are
+   `Kind` and `Opposite`: ST5's open question 3. The same proof as the planes over the axis
+   (`facing_cylinders`/`wall_frame` already have the closed forms) would admit them; no
+   recipe or NIST body asks.
+3. `faces_on_one_surface` takes `&Brep` and not `&mut Cx`: no memo is kept (the face boxes are
+   a local map; `Face::bounding_box` is the body's own cache).
+4. A grouping of every face (`surface_groups`) can be added over this function with a shared edge
+   cache; not asked for.
+
+### 46.6 Proposed 04 row
+
+| 11-28 | (For the owner's review) BW8b: `scx_bodyq::faces_on_one_surface(&Brep, seeds, keep, budget, stop) -> OneSurface { faces, stopped }`: the seeds and every face reached across a curve edge of two fins, on two faces of the same shells, run opposite senses, whose surfaces are `==` or two planes proved within `Resolution::approx` (ST5's rule, 74 §42.5); each edge that did not lead on is a `Stopped { edge, from, to, why }` with `NotCrossed::{Fins(n), Shells, Sense, Surface(NotOneSurface::{Kind, Crease, Opposite, Apart(Length), NoBox})}`; `keep` edges are not crossed. The proof moves from `scx-stitch` to `scx_surface::plane_bound` (`NotNear::{Crease, Opposite}`, `CREASE`), which both crates call; `merge_faces` answers are unchanged. Growth is by neighbours as the pin's, so a chain of planes each within `approx` of the next is grown through (open); quadrics on other frames and opposite planes are typed, not merged. Measured 4 work units and 3 to 4 us a face, 2 edge proofs per face, none for faces that share no edge | Amends ST5 (the proof lives in `scx-surface`); no new Cargo edge | 74 §46 |
+
+## 49. BW8c as built (11-28)
+
+BW8b's open question 46.5.1: `faces_on_one_surface` grew by neighbours, so a chain of planes
+each within `Resolution::approx` of the next but drifting overall was grown through, and the
+result could hold faces not on one surface. Ruled (truth over pin): the growth holds its
+promise, every face returned is proved on its seed's surface. In
+`crates/scx-bodyq/src/one_surface.rs`; no new Cargo edge, `scx-surface` unchanged.
+
+```rust
+#[non_exhaustive] pub enum NotCrossed { Fins(usize), Shells, Sense, Surface(NotOneSurface),
+                                        Drift { seed: FaceId, why: NotOneSurface } }
+```
+
+### 49.1 What is proved
+
+Each face carries the seed its growth came from (a seed is its own). When an edge passes the
+neighbour proof (the BW8b rules, unchanged) and the face across is not yet in the set, that face is
+proved against the seed's surface: `==` surfaces pass; two planes by one `plane_bound(face's
+plane, seed's plane, face's box)` (the face's box against the seed's unbounded plane, so the
+seed's box is not read); `Kind`, `Crease`, `Opposite`, `Apart(bound)`, `NoBox` as BW8b. A face
+that fails is not added and the edge is a `Stopped { to: Some(face), why: Drift { seed, why } }`.
+A face refused is remembered per (seed, face), so a second edge into it costs no second proof.
+The edge is decided once as before. Faces of several seeds each keep their own seed: a face is
+checked against the seed of the first growth to reach it.
+
+### 49.2 Decided: a new `NotCrossed::Drift`, not `Surface(Apart(..))`
+
+| Choice | For | Against |
+|---|---|---|
+| **New `Drift { seed, why }`** (taken) | The edge itself is fine (neighbours are within approx); the fault is the accumulated distance from the seed, and a caller cannot tell that from `Surface(Apart)`, which means "these two faces are apart"; `why` can be `Crease` or `Opposite` too (cumulative tilt past `CREASE` is possible: the neighbours' sine is under 1e-3, the seed's is not), so reusing `Surface(Crease)` would claim a crease between the two faces that does not exist; names the seed (several seeds) | One more variant for a caller that matches exhaustively (the enum is `non_exhaustive`, so none can; BW8b is one day old) |
+| Reuse `Surface(Apart(..))` | No new variant | Wrong claim about the edge's two faces: `Apart(l)` with `l > approx` between faces that were just proved within approx; a block wall's rim edges (`Surface(Crease)`, every one of `4n`) and drift stops are indistinguishable to a caller filtering on `why`; no seed named |
+
+Adversarial: a caller who filters "rim edges" on `Surface(Crease)` is not affected by drift stops
+(they are `Drift`), which is the point. A caller who wants every stop that is not a pair fault
+matches `Drift { .. }`. A single-seed growth with `from == seed` repeats the neighbour proof
+(one more `plane_bound`, identical answer: never a `Drift`); it is kept uniform rather than special-cased,
+costing one unit.
+
+### 49.3 Tests (closed forms)
+
+`a_drifting_chain_stops_where_the_cumulative_bound_is_crossed`: a wall of 10 by 10 faces,
+column `i` tilted `i d` about a line at the wall's edge with `d = 0.17 approx` (each pair a column
+apart is under 0.7 approx; the neighbour test passes everywhere, so BW8b would return all 100).
+Column `c` is off the seed's plane (column 0) by `c d (x_c + r)` (`x_c` the centre's distance from the pivot,
+`r` the half diagonal of the face's box). The growth returns exactly the columns under the first `c` whose bound
+exceeds `approx` (`first * 10` faces), and every stopped edge into the next column is `Drift { seed, Apart(l) }`
+with `approx < l < 1.3 * bound(first)`. The other nine tests stay green; the only change in them is the work
+count in `a_subdivided_block_grows_to_its_six_walls`: `4 n (n + 1) + n^2 - 1` a wall (one proof for each
+face reached beyond the seed).
+
+### 49.4 Measured (budget's count, release; timer throwaway, machine loaded)
+
+Growing one wall, work units, before and after:
+
+| steps | wall faces | before | after | per face before / after |
+|---|---|---|---|---|
+| 5 | 25 | 120 | 144 | 4.8 / 5.8 |
+| 10 | 100 | 440 | 539 | 4.4 / 5.4 |
+| 20 | 400 | 1,680 | 2,079 | 4.2 / 5.2 |
+
+One extra proof a face (`n^2 - 1`), as ruled. Time measured on a loaded machine was noisy
+(10 steps: 24 us before, 44 us after; 20 steps: 206 us, 284 us; one run each of 200 loops): treat it as
+at most +40% on a wall of all-distinct frames, where every face costs a box read, a `plane_bound` and a map
+insert more. A body whose faces share a surface (`==`) pays only a comparison. No other path changes.
+
+### 49.5 Open
+
+1. The bound is the same conservative one as ST5's (the offset at the face's centre plus the angle times the half
+   diagonal), so a face is refused up to 1.5x early; the drift stop is at that bound, not at the true largest
+   deviation.
+2. A face already in the set is not re-proved against another seed that also reaches it (two seeds that are not
+   on one surface and a face between them); first growth wins. The caller sees both seeds in `faces` and can
+   call once per seed.
+
+### 49.6 Proposed 04 row
+
+| 11-28 | (For the owner's review) BW8c: `scx_bodyq::faces_on_one_surface` now proves every grown face on its seed's surface (`scx_surface::plane_bound` of the face's box against the seed's plane, `==` passes), closing BW8b's drift: a chain of planes each within `Resolution::approx` of the next stops where the cumulative bound is crossed. A face that fails is a new typed `NotCrossed::Drift { seed, why: NotOneSurface }` (not `Surface(Apart)`: the edge's two faces are within approx, `why` may also be `Crease`/`Opposite` against the seed). Measured one more proof a face (4.4 to 5.4 work units on a 100-face wall). | For: truth over pin, the growth keeps its promise; one proof a face; `merge_faces` already does the same by proving each member against the group's plane. Against: +1 work unit a face; an early stop up to 1.5x by the conservative bound; first seed wins for a face two seeds reach | 74 §49 |
+
+## 50. ST6 as built (11-28)
+
+`scx_stitch::rebase(body, to, cx) -> Result<Rebased, StitchError>` and
+`WarningKind::AccuracyPastResolution` (in `scx-brep`, `#[non_exhaustive]`, so no caller breaks).
+`Rebased { done: Done<NoItems>, report: RebaseReport }`; `RebaseReport { from, to, past, recorded }`.
+
+### 50.1 What it does
+
+1. Two vertices of the body within the coincidence at `to` are `Refused(VerticesWithinCoincidence)`,
+   naming the pair, lower id first. The test is ST1's grid (`points::identify`, one operand), with each
+   vertex's reach `max(accuracy, to.zone)` and the accuracy of an unrecorded vertex read as the old
+   resolution, which is the bound its stamp promised.
+2. Every vertex, edge and face whose accuracy is past `to.zone` is warned. A face's accuracy is
+   derived from its uses' pcurve bounds, so the face is warned for its worst use bound.
+3. An entity with no recorded accuracy that is past `to` gets the old resolution recorded as its
+   accuracy, `Basis::Stated`. For a vertex or edge that is the record; for a face it is each of its
+   uses with no bound. An entity with a recorded accuracy keeps it and its basis.
+4. Nothing else moves. Ids, topology and geometry are kept, so `changes` is empty. The result is
+   finished under `Document::with_resolution(to)`; `cx.doc` is not read, because the stamp is the
+   one thing a rebase changes (09 §3).
+
+### 50.2 Choices, for and against
+
+- **Coarser identifies nothing (74 §4.3 step 8 says "identified by the same rules").** For: in one
+  body the rules say a pair of one operand's vertices within coincidence is `Refused`, so there is
+  nothing left to identify; identification across bodies is `stitch`/`sew`, which the caller runs
+  after. Against: a coarser resolution could close a gap between two edges of one body; but `sew`
+  does that, with its proof, and the rebase would otherwise decide joins under the stitch's
+  refusals.
+- **A stated accuracy for an unrecorded entity.** For: an unrecorded entity says "within the old
+  resolution", a fact that stops being "within" when the stamp moves finer; dropping it would
+  silently claim a tighter body, and keeping it unrecorded would too. Against: `Basis::Stated`
+  reads as "from a file". There is no "inherited" basis; adding one touches `scx-num`, which this
+  task does not. Change if a basis is added.
+- **Coarser keeps recorded accuracies below the new resolution.** For: no information is lost, and
+  a round trip back keeps them. Against: the record is then redundant; harmless.
+- **No `Raise`.** The accuracy is not grown, only recorded; the warning is the signal.
+- **Past, not raised, is never an error** (09 §3: lost accuracy is never a failure).
+
+### 50.3 Tests (`tests/rebase.rs`, 7)
+
+Coarser keeps topology, ids, points, with no warning and empty changes; same resolution is the body
+again; the block's vertices (1 apart) are refused at `to = 1.0` and `5.0`, and fine at `0.999`;
+finer than the stamp warns all 8 vertices, 12 edges and 6 faces and records 1e-5 `Stated` on each
+(26); a recorded 1e-4 vertex is kept with its basis, silent at 1e-3 and warned at 1e-5; the round
+trip 1e-5 to 1e-3 to 1e-5 leaves points, surfaces, edge shapes and ends equal (accuracy 1e-3
+recorded on all 26); determinism of report and work.
+
+### 50.4 Work
+
+Added work is only for rebase; no existing path changed. Per call: one unit per vertex (clearance
+grid, plus the grid's own charges), one per vertex, edge and face in the walk. Block (8 vertices,
+12 edges, 6 faces): 26 units for the walk plus the grid's 8 and its pair tests; the existing
+operations' work is unchanged (the new `WarningKind` variant adds no code to them).
+
+### 50.5 Proposed 04 row
+
+| 11-28 | (For the owner's review) ST6: `scx_stitch::rebase(&Brep, Resolution, &mut Cx) -> Result<Rebased, StitchError>` and `WarningKind::AccuracyPastResolution`. Two vertices within the new coincidence are `Refused(VerticesWithinCoincidence)`; entities whose accuracy is past the new resolution are warned and, where unrecorded, recorded as the old resolution with `Basis::Stated`; ids, topology and geometry are kept (empty changes), and the result is stamped `to`. Coarser identifies nothing in one body (74 §50.2). Against: `Stated` stands in for a missing inherited basis. For: no silent claim of a tighter body. | ST6 |
+
+## 51. BW5 as built (11-28)
+
+`scx_bodyq::pick(&Brep, origin, direction, EntityKind, aperture, &mut Budget, &Stop) ->
+Result<Vec<RayPicked>, BodyqError>` in `crates/scx-bodyq/src/pick.rs`; `RayPicked { entity, depth,
+distance, at }`. It is `pick_at` for a ray (74 §44): the same aperture (plus the entity's
+coincidence), `EntityKind` of face, edge or vertex (`NotPickable` otherwise), a batch-free answer
+where an empty one is a ray that picks nothing, and the order is by (depth, id) where `pick_at`'s
+is by (distance, id). `rays::cast` was not the building block after all: it answers a region
+(one clean ray), `pick` needs every place, so it reads `intersect_curve` directly.
+
+### 51.1 What is a hit
+
+The ray is the half-line from the origin as far as the body's box reaches (plus the aperture).
+
+- **Face.** One hit at each crossing or touch of the face as trimmed (distance 0, `at` the
+  crossing), by `intersect_curve` of the ray with the surface over the face's uv box and
+  `contains_uv` not `Outside`; an overlap (the ray lies in the face) is a hit at its start. A face
+  with no crossing that the ray passes within the aperture of has one hit at each dip toward its
+  surface (sphere, cylinder, cone, torus: the ray meets the surface offset by the aperture, which
+  is a surface of the same kind; between the meetings the foot's distance is minimised by a fixed
+  60-step golden section and the foot must be in the face), else one hit at the nearest approach
+  of its boundary edges (what a plane has: a ray that does not cross a trimmed plane comes nearest
+  on its boundary).
+- **Edge.** One hit for each stretch of its curve within the aperture of the ray: the curve meets
+  the thin cylinder about the ray (`intersect_curve`), and a bracket about each meeting is
+  minimised for the distance to the ray. The solver reports a transversal crossing of a tube
+  thinner than its tolerance as one tangent point, not an entry and an exit, so no pairing is
+  assumed: each meeting has the bracket from the middle before it to the middle after, and a
+  least at a shared middle counts only if the distance rises on both sides (two brackets finding
+  one dip are merged within 1e-6).
+- **Vertex.** One hit at its nearest approach (closed form).
+
+### 51.2 Decisions
+
+- **One hit per crossing, one per uncrossed face.** For: a cylinder wall crossed twice is two
+  places at two depths, which is what a caller who steps through the body wants (the pin's
+  `face_hits_by_ray` listed faces, losing the second). Against: an uncrossed near face gives one
+  hit, a crossed one gives hits only at crossings, so a face crossed and also grazed elsewhere
+  shows only the crossings. The nearest approach of a crossed face is distance 0 anyway.
+- **Depth is along the ray from its origin, not along the face's normal.** Ties are exact ties in
+  `f64` then by `Entity`; a ray up the shared edge of two faces (a cube's, tested) gives both at
+  the same depth, the lower id first. Against: two depths 1e-16 apart order by depth, not id; a
+  tolerance sort is not a total order, so the caller who wants a looser tie groups by coincidence.
+- **The aperture is for edges and surfaces, not a looser crossing.** A crossing outside the trim
+  by less than the aperture is found by the face's boundary edge within the aperture, not by
+  widening the uv box.
+- **NURBS.** The surface intersection already answers a crossing (a flat patch is a test), so a
+  NURBS face the ray crosses has its hit. What step 5 owns is the dip: a NURBS or procedural
+  face the ray reaches the box of, with no crossing, has no offset surface to meet, so
+  `Unsupported(Nurbs { at: Face })` names it (the same for a NURBS edge by the tube
+  intersection). Against: a ray whose box meets a NURBS face but is far from it is refused
+  rather than answered empty; the face's box is the only cheap test, and a certified distance
+  from a ray to a NURBS surface is what step 5 builds.
+- **Not covered.** A ray running parallel to a face at a standoff within the aperture with no
+  crossing is picked at the boundary where it leaves the face, not where it first comes over it;
+  a cone with an offset past its apex is not tried (`Cone::new` refuses it).
+- **No new error variant.** `Unsupported::Nurbs` names the face or edge, which is the missing
+  piece's place; the module doc names step 5.
+
+### 51.3 Tests (`tests/pick.rs`, 11)
+
+Closed forms: a z ray through the block gives bottom and top at 3 and 4.5, a slanted ray leaves
+at the least coordinate time; a ray along x through the cylinder at y 0.3 gives 5 -/+ sqrt(1.35)
+on the one wall, along the axis the two caps and, at aperture 1.25, the wall as a third; a sphere
+at 5 -/+ sqrt(1.4) and along a slanted diagonal at 3.7 and 6.3; a torus at 2.4, 3.6, 6.4, 7.6
+(four) and at z = 0.3 the chords sqrt(0.27) about 3 and 7, none through the hole; a ray passing
+cylinder (0.05), sphere (0.05), torus (0.05, two places 3 and 7) and cone (0.05 / sqrt(1.2025))
+misses is empty just under the distance and one hit (two for the torus) just over, depth and
+foot checked; a ray 0.03 beside a block face picks that face, bottom and top at 0.03; ties by id
+along a face's own edge; edges at 3 and 4.5, vertices at the same depths, and a wide aperture
+reaching the neighbouring corners; a circular rim crossed at 3.8 and 6.2; a NURBS patch crossed
+(a hit) and passed beside (typed refusal naming it); the refusals, determinism of hits and
+work, and a one-unit budget exhausting.
+
+### 51.4 Work (before / after)
+
+No existing path is changed, so there is no before: the pin's three functions were a face box
+walk plus a sample march. Per ray (units of the budget; wall time in a debug build): block
+face ray 4 units (0.6 ms); cylinder 2 (0.3 ms); sphere 2 (1.0 ms); torus four hits 2 (3.7 ms);
+torus grazing at aperture 0.06 272 (23 ms, 61 golden steps for each of two brackets, a foot a
+step); cylinder grazing 138 (0.5 ms); edge picks 6 to 14 units. The golden section is a fixed 60
+steps, so a grazing face costs about 70 units a dip; a closed-form foot of the dip per kind would
+be one, left open.
+
+### 51.5 Proposed 04 row
+
+| 11-28 | (For the owner's review) BW5: `scx_bodyq::pick(&Brep, origin, direction, EntityKind, aperture, budget, stop) -> Vec<RayPicked>` returns every face, edge or vertex within the aperture of a ray, with its depth, sorted by (depth, id): a face at each crossing, else at each dip toward its surface or its nearest boundary approach; an edge at each stretch within the aperture; the pin's three nearest-or-list ray functions and their tolerances are dropped. A NURBS face passed near without a crossing is `Unsupported(Nurbs)` naming it, never sampled. | For: a ray through a cylinder or torus has every place it meets it (two, four), ordered the way a caller steps; one aperture is the only looseness; exact on analytic geometry. Against: the dip is a fixed 60-step search (70 units a dip); a ray parallel to a face at a standoff is picked at where it leaves it; a NURBS face near the ray is refused though far from it. | 74 §51 |
+
+## 52. BW10 as built (11-28)
+
+Five new public functions in `crates/scx-bodyq/src/{comb,curvature,face_chain,sheet_seam}.rs`, on
+BW4's proof:
+
+```rust
+pub fn edge_comb(body: &Brep, edge: EdgeId, teeth: usize, budget: &mut Budget, stop: &Stop)
+    -> Result<Vec<Tooth>, BodyqError>;
+pub fn iso_comb(body: &Brep, face: FaceId, running: Running, fixed: f64, span: [f64; 2],
+                teeth: usize, budget: &mut Budget, stop: &Stop) -> Result<Vec<Tooth>, BodyqError>;
+pub struct Tooth { pub at: f64, pub point: Point3, pub curvature: Vec3 }
+pub enum Running { U, V }
+
+pub fn principal_curvatures(body: &Brep, face: FaceId, p: Point3, budget: &mut Budget,
+                            stop: &Stop) -> Result<Principal, BodyqError>;
+pub struct Principal { point, uv, normal, k1, k2, gaussian, mean, d1, d2 }
+
+pub fn tangent_face_chain_ordered(body: &Brep, faces: &[FaceId], angle: f64,
+                                  budget: &mut Budget, stop: &Stop) -> Result<FaceChain, BodyqError>;
+pub struct FaceChain { pub faces: Vec<FaceId>, pub undecided: Vec<Undecided> }
+pub struct Undecided { pub edge: EdgeId, pub why: Doubt }
+pub enum Doubt { Straddles { at: f64, angle: Ivl }, Unsupported(BodyqUnsupported) }
+
+pub fn sheet_seams(sheets: &[&Brep], zone: Length, tol: &ContinuityTolerances,
+                   budget: &mut Budget, stop: &Stop) -> Result<SheetSeams, BodyqError>;
+pub struct SheetSeams { pub seams: Vec<SheetSeam>, pub unproved: Vec<SheetMeet> }
+pub struct SheetSeam { pub meet: SheetMeet, pub along: [[f64; 2]; 2], pub same_sense: bool,
+                       pub continuity: Continuity }
+pub struct SheetMeet { pub sheets: [usize; 2], pub edges: [EdgeId; 2] }
+```
+
+New refusals: `BodyqRefusal::Count` (fewer than two teeth), `Singular { face }` (no normal or
+curvature at the foot); new defect `BodyqDefect::Gap { edge }`. BW4's `continuity` is split into
+`claims_of` and `along` so a seam between two bodies runs the same proof; `Faces::between` and
+`Edge::across` in `along.rs` build the faces of any two surfaces. Nothing BW4 returns changes.
+
+### 52.1 Method
+
+- **Combs.** A tooth is a point and a curvature vector. Along an edge it is `kappa N`,
+  `(C' x C'') x C' / |C'|^4`, from the curve's jet. Along a parameter line it is the normal curvature
+  times the unit normal, `(n . S_tt / |S_t|^2) n`, from the surface's jet to the second order; the
+  vector does not depend on the sign of `n`. Stations are even steps of the parameter, the ends
+  included; a closed edge's end is its start, so it takes `teeth` steps. A station with no tangent
+  is left out, and every tooth names its parameter, so a gap in the comb is visible. One unit a
+  station. **A pole is found relatively.** Along a sphere's parallel at the pole `|S_u|` is
+  `6e-17 r`, not 0 (`cos(pi / 2)`): an exact-zero test would give a tooth of length `1e16`. The
+  partials are taken not to span a plane when the shorter is under `1e-12` of the longer, or they
+  are parallel to that relative bound.
+- **Principal curvatures.** The foot (`face_uv`: closed form on the analytic kinds, one unit), the
+  jet there, and the second form in the orthonormal tangent frame `e1 = S_u / |S_u|`,
+  `e2 = n x e1`, as the symmetric matrix `-II(e_i, e_j)`. Its eigenvalues are `k1 >= k2` and its
+  eigenvectors the directions, `theta = atan2(2b, a - d) / 2`. At an umbilic the directions are the
+  frame's. **Sign: convex positive against the outward normal**, the natural normal where neither
+  side is solid (a sheet). A sphere reads `+1/r`, a cylinder `1/r` and `0`, a torus's inner
+  equator `+1/r` round the tube and `-1/(R - r)` along it. Both faces solid is
+  `NoMaterialSide`. This answers BW4's open question 4 the other way: BW4's drop is a
+  normal-section bend against the normal (a sphere is `-1/r`) because it is a *difference across an
+  edge*; a comb or a reading of one face wants the convex sign. The two never meet in one type.
+- **The pin chose the nearest face** among all faces of a sheet. Here the caller names the face
+  (`closest_to_point` already finds it): one function that scans every face would be a second
+  place that picks, and hides which face answered.
+- **Face chain.** Seeds first (each once, in order); then from each reached face its edges in id
+  order, each decided once (cache) by `tangent_all_along` at the caller's angle under the one
+  budget; a smooth (proved `Tangent`) edge adds each face of its fins. `NotTangent` and an edge
+  with fewer than two fins or collapsed join nothing and are not listed. **An edge the proof cannot
+  settle is named, not an error.** `Undecided` (`Doubt::Straddles`) and `Unsupported` (`Doubt::
+  Unsupported`: a NURBS face, three faces at an edge) are listed once in `undecided`; the pin lost
+  the whole chain on a refusal of a NURBS face.
+- **Sheet seams.** A seam is a run along which two sheets' boundary edges (curve edges with one
+  fin) lie together within `zone`. Each curve's two ends are dropped on the other
+  (`Curve::invert` on the interval; a foot off the interval is replaced by the nearer end); an end
+  within the zone *lands*, and each curve's run is the span of its landing ends and of the other's
+  landing ends' feet. Fewer than two distinct landing ends, or a run under `1e-9` of the interval,
+  is no seam (a corner touch). The run is *proved* when each curve over its run stays within the
+  zone of the other, certified by `curve_curve_gap(.., Aim::Against(zone))` both ways under the
+  budget; otherwise the pair is in `unproved`. A proved run is measured by BW4's proof over the
+  first sheet's curve across the run, between the two faces, the second face read on the side that
+  agrees across the seam (the fins running opposite ways along the run). The sense of the second
+  curve against the first is read from the two tangents at the middle of the run, so a whole
+  circle needs no guess at which end its seam foot falls on.
+  - **A proof, not stations.** The pin measured stations by the nearest point of each surface to a
+    guess, reporting five measures at each. BW4 replaced that by proved orders and measured drops
+    (74 §25), and a seam is the same `Continuity`. So `continuity_report`, whose station list this
+    replaces, is not ported: `continuity` per edge and `sheet_seams` are its two halves.
+  - **No `unmeasured`.** The pin listed seams whose faces had no orientation or no station. A fin's
+    sense is always known here, and the proof has no stations to lose.
+  - **The pin's loop rule is not ported.** A run that would wrap past a closed curve's seam does
+    not fit one interval; it is `unproved`, never `Apart`. Two closed curves that touch at their
+    seam points only have all four ends landing, a run of the whole of each, and the gap proof
+    fails: `unproved`, not a seam and not silence.
+
+### 52.2 Cases for and against
+
+- **Teeth are `usize`, with `Count` below 2; the pin's 2000 cap is dropped.** For: the budget is
+  the bound. Against: a caller can ask for a million teeth and get them (and pay).
+- **`Tooth` has `at`.** For: an omitted station is visible. Against: a tooth of an edge comb
+  and of an iso comb mean different parameters.
+- **Convex-positive principal curvatures against BW4's section drop sign.** See above. For: each
+  matches its use and the pin. Against: two signs in one crate; both are documented and each
+  test pins its own.
+- **`FaceChain::undecided` holds `Doubt`, not a bare edge.** For: a caller can tell a straddle
+  (loosen the angle) from an unsupported face (nothing to loosen). Against: one more type.
+- **Seams: `unproved` covers refuted and open runs alike.** For: from the ends, the curves may
+  part between them, whether the proof or the refutation said so. Against: a caller cannot tell a
+  certain non-seam from an undecided one; the refuted case is a different edge that happens to
+  share two end points.
+- **Seams are proved against `zone`, measured from the first sheet's curve.** The faces' own
+  gap is surface to surface at that curve's point, so a second edge that bulges inside the zone is
+  not measured on its own curve. For: one curve, one parameter, as BW4. Against: G0 does not see
+  an edge that is `zone` off the other.
+
+### 52.3 Tests
+
+**`tests/curvature.rs` (9).** The circle comb is `1/R` towards the axis at 12 distinct stations
+(the start once); a straight edge combs to zeros with both ends; the cylinder's parameter lines
+bend `1/R` round and `0` along; a sphere's poles have no tooth on a meridian or a parallel and
+the rest read `1/r`; refusals (`Count`, `NotFinite`, `Collapsed`), one unit a station,
+`Exhausted`, `Cancelled`; principal curvatures of a cylinder (`1/R`, `0`, directions round and
+along, the foot), a sphere (`+1/r` twice), a pole (`Singular`) and a torus inner and outer
+equator (`+1/r`, `-1/(R - r)`, Gaussian `-1/(r (R - r))`).
+
+**`tests/face_chain.rs` (6).** A stadium's four walls chain from one and its caps do not; a box and
+a can chain nowhere (the can's seam is smooth and joins its wall to itself); picks come first, once
+each; two walls 0.3 degrees apart chain at 0.5, not at 0.2, and at 0.3 the edge is named
+`Straddles`; a NURBS face is named `Unsupported(Nurbs)` and the chain stops short of it; angle
+refusals, `NoEntity`, equal work for equal runs, `Exhausted`, `Cancelled`.
+
+**`tests/sheet_seams.rs` (8).** Two coplanar rectangles on one plane are G4 by identity; on two
+frames the same plane is proved G4 by the series; a rectangle shifted by half meets over `[0.5, 1]`
+of each edge; a corner touch, a gap and a single sheet have no seam; a bulged edge is `unproved` at
+a zone of 0.1 and a G4 seam at 0.5; **a plane tangent to a quarter pipe is G1 and its jump is 1/r
+for either plane normal and either order** (this fails if the second face is read on the wrong
+side: the angle would be pi); a disc capping a tube meets it on the whole circle, G0 proved, G1
+refuted at pi/2; tolerance refusals, equal work, `Exhausted`, `Cancelled`.
+
+**Not ported, with what each proved:**
+
+| pin test | what it proved | where |
+|---|---|---|
+| `continuity_report` tests (`edge_continuity_*`) | the station list over a body's edges | BW4: `continuity` proves an edge, with the same box, stadium and cylinder cases |
+| `a_disc_capping_a_tube_meets_it_at_stations_on_the_circle` | stations on the circle | here, as the proof along the circle |
+| the kernel's `principal_curvatures_*` on NURBS | the second form of a spline | NURBS faces: step 5 |
+| `iso_comb` on a NURBS surface | the same | the jet takes a NURBS surface; no test until a made one exists |
+
+### 52.4 Costs (release, local box, mean of 50 runs)
+
+| case | units | time |
+|---|---|---|
+| `sheet_seams` tube and disc, zone 1e-6 (whole circle) | 11,401 | 32.5 ms |
+| plane tangent to a quarter pipe, zone 1e-6 | 115 | 0.56 ms |
+| two coplanar rectangles, zone 1e-3 | 66 | 0.059 ms |
+| `edge_comb`, `iso_comb`, `principal_curvatures` | 1 a station / 1 | not measured (a jet each) |
+
+The tube is dominated by the gap proof on a full circle at a zone of 1e-6 (and G0 at 1e-6 mm, as in
+74 §25.4). No existing path changed: `continuity` is the same code split in two, and `Edge::of`
+builds its faces through `Faces::between`; the BW4 tests pass unchanged. Before: n/a for the new
+functions.
+
+### 52.5 Deviations
+
+- Not ported: `continuity_report` (replaced by BW4's proof, §52.1), the pin's `unmeasured` and the
+  nearest-face scan of `principal_curvatures` (the caller names the face).
+- `(&mut Budget, &Stop)` on all five, as BW4 (R8).
+- `Tooth` carries its parameter; the pin's combs had only point and vector.
+- Pole handling by a relative bound, not an exact zero (§52.1).
+
+### 52.6 Open questions
+
+1. Should `sheet_seams` take a sheet's *face* boundary as well as one-fin edges, for a sheet that
+   is part of a closed body (an open shell cut from one)? Today only one-fin curve edges are tried.
+2. NURBS edge curves and faces: `Curve::invert` and the field wait on step 5 and SU6b; a seam over a
+   NURBS curve is `Unsupported(Nurbs)`.
+3. Should the run proof use a zone looser than the G0 tolerance? Today both are the caller's.
+4. A run that wraps past a closed curve's seam is `unproved`: should the run be two intervals?
+
+### 52.7 Proposed 04 row
+
+| 11-28 | (For the owner's review) **BW10: combs, principal curvatures, sheet seams and the tangent face chain in scx-bodyq.** `edge_comb`, `iso_comb` give a `Tooth { at, point, curvature }` per station (a station with no tangent or at a pole is left out, found relatively); `principal_curvatures(body, face, p, ..) -> Principal` signs convex positive against the outward normal (BW4's drops keep their section sign); `tangent_face_chain_ordered(body, faces, angle, ..) -> FaceChain { faces, undecided }` joins faces across edges proved tangent and names the edges it cannot settle instead of failing; `sheet_seams(&[&Brep], zone, tol, ..) -> SheetSeams { seams, unproved }` finds the runs where separate sheets' boundary edges lie together (certified both ways by `curve_curve_gap`) and measures each with BW4's proof, the second face read on the agreeing side. `continuity_report` is replaced by BW4's `continuity`. New refusals `Count`, `Singular`; defect `Gap`. Edges: none | A seam is a proved run and a measured order of contact, not nine stations; no failing default for a pole or a NURBS face. Against: the run's wrap past a closed seam is `unproved`; the tube seam costs 11,401 units at a zone of 1e-6 | 74 §52 |

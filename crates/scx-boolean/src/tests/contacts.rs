@@ -11,7 +11,8 @@
 //! `seam-sphere-sphere` and `seam-box-minus-sphere`, and `point_contact_unions_check_clean`
 //! over all eleven of its point contacts. The pin builds each with a point loop, and so
 //! does this crate (BO25); the operations that keep only one side of the touch are built
-//! as well.
+//! as well. The three spheres touching a cylinder or a torus off its axis answer by BO22's
+//! closed form (75 §13.13).
 
 use std::f64::consts::PI;
 
@@ -78,7 +79,7 @@ fn touched(c: &Point, doc: Document) {
     assert!(points >= 1, "{}: no point loop", c.name);
 }
 
-fn non_manifold(a: &Brep, b: &Brep, which: BooleanOp, doc: Document, name: &str) {
+pub(super) fn non_manifold(a: &Brep, b: &Brep, which: BooleanOp, doc: Document, name: &str) {
     let e = op(a, b, which, doc).unwrap_err();
     assert!(
         matches!(
@@ -95,7 +96,7 @@ fn non_manifold(a: &Brep, b: &Brep, which: BooleanOp, doc: Document, name: &str)
 /// fins is a pinch D5 builds: the default contract must refuse it at exactly that edge
 /// (its third test), and the contract that allows radial edges (CK3) must prove it, which
 /// includes the shells' orientation. Any other body passes the default contract.
-fn result(a: &Brep, b: &Brep, which: BooleanOp, doc: Document) -> Brep {
+pub(super) fn result(a: &Brep, b: &Brep, which: BooleanOp, doc: Document) -> Brep {
     let body = op(a, b, which, doc)
         .unwrap_or_else(|e| panic!("{which:?}: {e:?}"))
         .body;
@@ -220,7 +221,7 @@ fn point_contacts(doc: Document) -> Vec<Point> {
             pin: UNION,
             built: apart(40.0 * PI, sphere_v(3.0)),
             touch: two(40.0 * PI, sphere_v(3.0)),
-            ssi: true,
+            ssi: false,
         },
         Point {
             name: "off-seam-cylinder-sphere",
@@ -229,7 +230,7 @@ fn point_contacts(doc: Document) -> Vec<Point> {
             pin: UNION,
             built: apart(40.0 * PI, sphere_v(3.0)),
             touch: two(40.0 * PI, sphere_v(3.0)),
-            ssi: true,
+            ssi: false,
         },
         Point {
             name: "seam-torus-sphere",
@@ -242,7 +243,7 @@ fn point_contacts(doc: Document) -> Vec<Point> {
             pin: UNION,
             built: apart(tor, sphere_v(2.0)),
             touch: two(tor, sphere_v(2.0)),
-            ssi: true,
+            ssi: false,
         },
         Point {
             name: "seam-torus-box",
@@ -381,14 +382,19 @@ fn a_body_touching_itself_along_an_edge_is_one_region_and_one_shell() {
 }
 
 #[test]
-fn faces_tangent_along_a_contact_edge_are_non_manifold() {
+fn a_cylinder_tangent_to_a_face_along_a_cube_edge_unites_at_an_edge_of_four_fins() {
     // A cylinder lying along the unit cube's edge x = 1, z = 1, its side tangent to the
-    // face x = 1 there: two faces leave that edge in one direction, so the result meets
-    // itself inside a face as well as along the edge.
+    // face x = 1 there. BO7 refused it (two faces leave the edge in one direction); BO22
+    // orders those two by how they bend apart, so the union builds: one edge of four
+    // fins, two regions meeting there inside one outer shell (as two blocks sharing an
+    // edge), volume 1 + pi.
     let doc = Document::default();
     let a = cuboid([0.0; 3], [1.0; 3], doc);
     let b = cyl([2.0, 0.0, 1.0], [0.0, 1.0, 0.0], X, 1.0, 1.0, doc);
-    non_manifold(&a, &b, UNION, doc, "tangent cylinder");
+    let body = result(&a, &b, UNION, doc);
+    near(volume(&body), 1.0 + PI, 1e-9);
+    assert_eq!(body.edges().filter(|e| e.fins().len() == 4).count(), 1);
+    assert_eq!(form(&body), (2, vec![1, 1], 1));
 }
 
 #[test]

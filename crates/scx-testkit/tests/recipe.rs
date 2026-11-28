@@ -91,7 +91,8 @@ fn the_list_is_unique_stable_and_complete() {
             )
         })
         .count();
-    assert_eq!((built, manifold, ssi), (11, 0, 6));
+    // BO22 builds the three sphere touches (75 §13.39).
+    assert_eq!((built, manifold, ssi), (14, 0, 3));
     // BO4's five and BO5's six are the ones the plan names.
     for n in [
         "box-cyl-hole",
@@ -99,17 +100,13 @@ fn the_list_is_unique_stable_and_complete() {
         "sphere-and-box",
         "coplanar-union",
         "torus-minus-box",
-    ] {
-        assert!(matches!(by_name(&rs, n).outcome, Outcome::Built(_)), "{n}");
-    }
-    for n in [
-        "tpipe",
         "seam-cylinder-sphere",
         "off-seam-cylinder-sphere",
         "seam-torus-sphere",
-        "seam-torus-box",
-        "seam-vertex-torus-box",
     ] {
+        assert!(matches!(by_name(&rs, n).outcome, Outcome::Built(_)), "{n}");
+    }
+    for n in ["tpipe", "seam-torus-box", "seam-vertex-torus-box"] {
         assert!(
             matches!(
                 by_name(&rs, n).outcome,
@@ -753,26 +750,21 @@ fn refused_inputs_are_invalid_and_the_floor_is_the_resolution() {
             }
         }
     }
-    // The horn torus is valid input the library does not yet build (D3).
+    // The horn torus is valid input the library builds (MK4b).
     let rs = all(1e-5);
     let horn = by_name(&rs, "torus-horn");
     let Shape::Torus { major, minor } = horn.base.shape else {
         panic!()
     };
     assert_eq!(major, minor);
-    assert!(matches!(
-        horn.outcome,
-        Outcome::Unsupported(Unsupported::HornTorus)
-    ));
+    assert!(matches!(horn.outcome, Outcome::Built(_)));
 }
 
 #[test]
 fn built_recipes_have_a_solid_an_oracle_and_a_truth() {
     for res in RES {
         for r in all(res) {
-            if matches!(r.outcome, Outcome::Refused(_))
-                || matches!(r.outcome, Outcome::Unsupported(Unsupported::HornTorus))
-            {
+            if matches!(r.outcome, Outcome::Refused(_)) {
                 continue;
             }
             for p in r.parts() {

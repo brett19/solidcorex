@@ -135,8 +135,9 @@ fn a_block_touching_a_torus_keeps_the_touching_pair() {
 
 /// A sphere of radius 3 off a cylinder's axis by `5 + gap` along the diagonal `x = y`, so
 /// its box meets the r=2 cylinder's (x and y from about 0.54) while the shared box is not
-/// clear of either surface alone: the proof needs the bisection. Clear by 0.8 it is
-/// proved apart at depth 8 (not at 6); clear by 0.5 or less it is not proved, and refused.
+/// clear of either surface alone. Before BO22 this pair had no closed form and needed the
+/// bisection (proved apart at depth 8 clear by 0.8, refused by 0.5 or less); now the sphere's
+/// nearest approach to the axis decides it (`scx_ssi::analytic`'s touch), at any gap.
 fn cylinder_and_sphere(gap: f64) -> Result<FaceFace, BooleanError> {
     let doc = Document::default();
     let c = cylinder(&frame([0.0; 3], Z, X), mm(2.0), mm(10.0), &doc).unwrap();
@@ -156,22 +157,28 @@ fn cylinder_and_sphere(gap: f64) -> Result<FaceFace, BooleanError> {
 }
 
 #[test]
-fn a_sphere_clear_of_a_cylinder_is_dropped_by_bisection() {
-    assert_eq!(cylinder_and_sphere(0.8).unwrap(), FaceFace::default());
-    // Not proved (refused, the sound side): a gap the boxes at depth 8 cannot resolve.
-    assert!(matches!(
-        cylinder_and_sphere(0.3),
-        Err(BooleanError::Unsupported(
-            BooleanUnsupported::SsiPair { .. }
-        ))
-    ));
+fn a_sphere_clear_of_a_cylinder_is_apart_by_the_closed_form() {
+    // Clear by more than the resolution (1e-5), however little: no bisection needed.
+    for gap in [0.8, 0.3, 1e-3, 2e-5] {
+        assert_eq!(
+            cylinder_and_sphere(gap).unwrap(),
+            FaceFace::default(),
+            "{gap}"
+        );
+    }
 }
 
 #[test]
-fn a_sphere_touching_a_cylinder_is_refused() {
-    let e = cylinder_and_sphere(0.0).unwrap_err();
-    let BooleanError::Unsupported(BooleanUnsupported::SsiPair { kinds, .. }) = e else {
-        panic!("{e:?}");
-    };
-    assert_eq!(kinds, [SurfaceKind::Cylinder, SurfaceKind::Sphere]);
+fn a_sphere_touching_a_cylinder_touches_it_at_one_point() {
+    // At the wall's point nearest the centre, (sqrt 2, sqrt 2, 5); a miss or press within the
+    // resolution is the same touch.
+    let h = 2.0_f64.sqrt();
+    for gap in [0.0, 5e-6, -5e-6] {
+        let f = cylinder_and_sphere(gap).unwrap();
+        assert!(f.sections.is_empty() && f.lying.is_empty() && f.coincident.is_empty());
+        let [t] = f.touches[..] else {
+            panic!("{gap}: {:?}", f.touches);
+        };
+        assert!(t.at.distance(pt([h, h, 5.0])) < 1e-12, "{gap}: {:?}", t.at);
+    }
 }

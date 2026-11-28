@@ -124,6 +124,16 @@ fn primitives(frame: &Frame, tag: &str) -> Vec<Case> {
             4.0 * PI * PI * big * small,
         ),
     );
+    // The horn torus (MK4b): the tube meets the axis at a pole.
+    let horn = 6.0;
+    add(
+        "horn torus",
+        torus(frame, mm(horn), mm(horn), &d).unwrap().body,
+        (
+            2.0 * PI * PI * horn * horn * horn,
+            4.0 * PI * PI * horn * horn,
+        ),
+    );
     out
 }
 
@@ -238,7 +248,27 @@ fn check(case: &Case, chord: f64) {
     let s = spec(chord);
     let mesh = mesh_of(&case.body, &s);
     let m = adapt(&mesh);
-    let v = oracle::violations(&m, oracle::Limits::default());
+    let horn = case.name.ends_with("horn torus");
+    // A horn torus's pole is the tip of two needles (the surface there is `rho = z^2 / 2R`):
+    // the fan of triangles round it turns by less than a degree at fine chords, which is no
+    // fold of the surface, so its dihedral limit is off.
+    let limits = oracle::Limits {
+        fold_cos: if horn {
+            -1.0
+        } else {
+            oracle::Limits::default().fold_cos
+        },
+        ..oracle::Limits::default()
+    };
+    let mut v = oracle::violations(&m, limits);
+    // A horn torus's pole is a pinch: two lobes meet at one vertex, the one violation it has.
+    if horn {
+        assert!(
+            matches!(v[..], [oracle::Violation::NonManifoldVertex { .. }]),
+            "{name}: {v:?}"
+        );
+        v.clear();
+    }
     assert!(v.is_empty(), "{name}: {v:?}");
     let gap = oracle::volume_gap(&m, case.volume, oracle::chord_bound(chord, case.area));
     assert!(gap.holds(), "{name}: {gap:?}");

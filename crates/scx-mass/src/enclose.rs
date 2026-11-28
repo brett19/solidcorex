@@ -385,6 +385,28 @@ fn set_box(faces: &[(Face<'_>, f64)]) -> Result<Option<Extent3d>, MassError> {
     Ok(b)
 }
 
+/// The most halvings of a pcurve span whose enclosure is not finite: up to 64 pieces.
+const SPLITS: u32 = 6;
+
+/// A box holding `surface` over the uv image of `curve` on `[lo, hi]`: the whole span's
+/// enclosure, or the hull of its halves' where that is not finite (a pcurve seen through a
+/// chart's inverse, near the chart's pole, encloses only in pieces), to `depth` halvings.
+fn strip_box(surface: &Surface, curve: &Curve2, lo: f64, hi: f64, depth: u32) -> Option<Extent3d> {
+    let trim = curve.point_over(Ivl::new(lo, hi));
+    let whole = Extent2d::from_bounds(trim.x.lo, trim.y.lo, trim.x.hi, trim.y.hi)
+        .and_then(|uv| surface.box_over(uv));
+    if whole.is_some() {
+        return whole;
+    }
+    let mid = 0.5 * (lo + hi);
+    if depth == 0 || !(lo < mid && mid < hi) {
+        return None;
+    }
+    let a = strip_box(surface, curve, lo, mid, depth - 1)?;
+    let b = strip_box(surface, curve, mid, hi, depth - 1)?;
+    Some(a.union(b))
+}
+
 /// `max |z - z0|` over a box.
 fn reach(b: &Extent3d, z0: f64) -> f64 {
     up((b.max().z - z0).abs().max((b.min().z - z0).abs()))
@@ -492,9 +514,7 @@ fn walk(face: Face<'_>, z0: f64) -> Result<(Vec<Piece<'_>>, Vec<Strip<'_>>, Ivl)
                 Sense::Reversed => -1.0,
             };
             let (lo, hi) = (interval.min(), interval.max());
-            let trim = curve.point_over(Ivl::new(lo, hi));
-            let sbox = Extent2d::from_bounds(trim.x.lo, trim.y.lo, trim.x.hi, trim.y.hi)
-                .and_then(|uv| surface.box_over(uv))
+            let sbox = strip_box(surface, curve, lo, hi, SPLITS)
                 .ok_or_else(|| no_box(Entity::from(id)))?;
             strips.push(Strip {
                 pcurve: curve,

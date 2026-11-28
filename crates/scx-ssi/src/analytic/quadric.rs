@@ -1,7 +1,8 @@
 // Written for solidcorex. Apache-2.0.
 //! The cylinder and cone pairs off one axis that still have a closed form (research 73
 //! §4.2; the table in [`super`]): two cylinders with parallel axes, and the Miller-Goldman
-//! pairs, two cylinders or cones whose axes meet and that share an inscribed sphere.
+//! pairs, two cylinders or cones whose axes meet and that share an inscribed sphere; a
+//! sphere touching a cylinder or torus is [`super::touch`]'s.
 //!
 //! **Parallel cylinders.** Moved onto `a`'s direction, `b`'s axis moves no point of its
 //! extent by more than its tilt times its reach, `delta`; within the tolerance the pair is
@@ -48,6 +49,9 @@ pub(super) fn pair(
     tol: f64,
 ) -> Closed<Intersection> {
     if let Some(answer) = parallel(ra, rb, clip, tol) {
+        return answer;
+    }
+    if let Some(answer) = super::touch::touch(ra, rb, clip, tol) {
         return answer;
     }
     match (a, b) {

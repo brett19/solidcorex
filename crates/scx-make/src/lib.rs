@@ -27,6 +27,7 @@
 //! of [`FaceId`](scx_brep::FaceId)s by role.
 
 mod assembly;
+mod blend;
 mod block;
 mod cone;
 mod cylinder;
@@ -38,11 +39,14 @@ pub mod loft;
 mod prism;
 mod radial;
 mod revolve;
+mod ruled;
 mod sheet;
+mod sheet_blend;
 mod sphere;
 mod sweep;
 mod torus;
 
+pub use blend::{BlendError, BlendRefusal, Blended, EndOrder, SectionFrame, section_blend};
 pub use block::{BlockFaces, block};
 pub use cone::{ConeFaces, cone};
 pub use cylinder::{CylinderFaces, cylinder};
@@ -56,9 +60,19 @@ pub use frames::{
 pub use prism::{PrismFaces, prism};
 pub use radial::{RadialCone, RadialFaces, radial};
 pub use revolve::{RevolveFaces, RevolveSheetFaces, Turn, Wall, revolve, revolve_sheet};
+pub use ruled::{Join, RuledError, RuledRefusal, RuledSide, RuledUnsupported, Which, ruled};
 pub use sheet::{SheetFaces, sheet};
+pub use sheet_blend::{
+    BlendSide, Contact, EdgeBlend, Fillet, FilletCrossing, FilletSection, FilletSheets, Round,
+    Seam, SeamGap, SectionBlendDefinition, SheetBlendError, SheetBlendRefusal,
+    SheetBlendUnsupported, SheetSide, blend_edges, fillet_crossing, fillet_sheets,
+    open_section_turns, point_frames, section_frames, section_frames_outward,
+};
 pub use sphere::{SphereFaces, sphere};
-pub use sweep::{SweepFaces, sweep};
+pub use sweep::{
+    LawFault, MAX_SKIN_STATIONS, MIN_SKIN_STATIONS, Needed, Orientation, PathFrame, Placement,
+    Rail, RailFault, RailFit, Rails, Shape, SweepFaces, fractions, placements, sweep,
+};
 pub use torus::{TorusFaces, torus};
 
 use scx_brep::Brep;

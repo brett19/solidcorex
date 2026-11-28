@@ -433,10 +433,6 @@ impl Builder<'_> {
                 gap: kind,
                 reached,
             },
-            GapError::Pending(_) => BuildError::Pending {
-                entity,
-                waits: Waits::NurbsGap,
-            },
             cause => BuildError::Gap { entity, cause },
         };
         let first = run(Aim::Against(zone)).map_err(fail)?;

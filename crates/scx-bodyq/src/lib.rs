@@ -49,6 +49,25 @@
 //! face's normal field along the edge curve with Taylor models, splitting the curve as the
 //! proof needs under one budget.
 //!
+//! **Combs, curvature, seams and chains** (research 74 §52). [`edge_comb`] and [`iso_comb`] give
+//! the curvature vectors a comb is drawn from, [`principal_curvatures`] a face's at a point,
+//! [`sheet_seams`] where separate sheets meet and the order of contact proved along each seam,
+//! and [`tangent_face_chain_ordered`] the faces joined across smooth edges.
+//!
+//! **Picking and stored references** (research 74 §44). [`pick_at`] returns every face, edge
+//! or vertex within an aperture of each point, sorted by (distance, id); [`still_names`] says
+//! which entities of a body descend, by the edits' [`Changes`](scx_brep::Changes), from stored
+//! references, and which of them carry the stored point.
+//!
+//! **Picking along a ray** (research 74 §51). [`pick`] returns every face, edge or vertex within an
+//! aperture of a ray, sorted by (depth, id), as [`pick_at`] does for points.
+//!
+//! **One surface** (research 74 §46). [`faces_on_one_surface`] grows a set of faces across the
+//! edges where the faces are proved to lie on one surface (equal, or planes within the
+//! resolution by `scx_surface::plane_bound`, ST5's proof), with the reason each other edge
+//! stopped it; every face grown is also proved on its seed's surface (research 74 §49), so a
+//! chain of planes that drifts is not grown through.
+//!
 //! **Vertex joints and wall geometry** (research 74 §34, BW11). [`leaving`], [`turn_at`],
 //! [`convex_at`] and [`joint_turn`] read a joint of edges at a vertex. [`facing_planes`],
 //! [`facing_cylinders`], [`wall_holds`], [`planes_meeting`], [`move_edge_onto_line`],
@@ -62,9 +81,12 @@ mod along;
 mod betti;
 mod cap;
 mod classify;
+mod comb;
 mod continuity;
+mod curvature;
 mod cylinder_wall;
 mod error;
+mod face_chain;
 mod face_pair;
 mod face_surface;
 mod geom;
@@ -73,11 +95,17 @@ mod mid_joint;
 mod mid_sheet;
 mod near;
 mod on;
+mod one_surface;
+mod pick;
+mod pick_at;
 mod rays;
 mod reach;
+mod reads;
 mod recognize;
 mod round_face;
+mod sheet_seam;
 mod side;
+mod still;
 mod tangent;
 mod tight;
 
@@ -87,9 +115,12 @@ pub use cap::{
     is_point_on_plane, is_square_plane_at_height, prism_part,
 };
 pub use classify::{PointClass, classify_point};
+pub use comb::{Running, Tooth, edge_comb, iso_comb};
 pub use continuity::{Continuity, ContinuityTolerances, Limit, Measured, Order, continuity};
+pub use curvature::{Principal, principal_curvatures};
 pub use cylinder_wall::{WallFrame, Wrap, wall_frame};
 pub use error::{BodyqDefect, BodyqError, BodyqRefusal, BodyqUnsupported};
+pub use face_chain::{Doubt, FaceChain, Undecided, tangent_face_chain_ordered};
 pub use face_pair::{
     Apart, CylinderFace, Directions, Facing, FacingCylinders, FacingPlanes, OutwardPlane,
     axial_range_in, cylinder_face, facing_cylinders, facing_planes, material_toward_axis,
@@ -99,8 +130,16 @@ pub use face_surface::{Closest, FaceSurface, face_surface};
 pub use joint::{Convexity, Leaving, Missing, Turn, convex_at, joint_turn, leaving, turn_at};
 pub use mid_joint::{Line3, Meeting, Moved, move_edge_onto_line, planes_meeting};
 pub use mid_sheet::{Holds, Wall, from_frame, in_frame, onto_plane, polygon_area, wall_holds};
+pub use one_surface::{NotCrossed, NotOneSurface, OneSurface, Stopped, faces_on_one_surface};
+pub use pick::{RayPicked, pick};
+pub use pick_at::{Picked, pick_at};
 pub use rays::RAYS;
 pub use reach::Near;
+pub use reads::{
+    EdgeClosest, EdgePoint, FaceUv, LineHit, Nearest, ParallelTurnError, closest_to_point, edge_at,
+    edge_closest_point, edge_distance, face_contains, face_line_hits, face_line_nearest, face_uv,
+    faces_against, faces_at, outward_normal, rim_edges, turn_to_parallel,
+};
 pub use recognize::{
     Bore, Equivalence, Layer, Lone, NotPrism, Options as StackOptions, Piece, PrismSection,
     Recognition, Slot, Stack, Stacks, Why, bores, hole_stacks, prism_equivalent, prism_section,
@@ -111,7 +150,9 @@ pub use round_face::{
     SeatFrame, beside_clear, extent, extent_in, far_end, grow_block, into_seat, past_end,
     stands_over, whole_band,
 };
+pub use sheet_seam::{SheetMeet, SheetSeam, SheetSeams, sheet_seams};
 pub use side::{Along, Sides, side_at_touch, sides_along};
+pub use still::{Standing, Step, Stored, still_names};
 pub use tangent::{Tangency, tangent_all_along};
 pub use tight::{tight_body_box, tight_box, tight_box_charged};
 

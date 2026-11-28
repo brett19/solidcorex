@@ -8,10 +8,13 @@
 //!   each face leaves the edge at its midpoint in the direction `d = σ N × T` (`T` the
 //!   edge's tangent, `N` the face's normal at the use's lift, `σ` the use's sense), and
 //!   the fins are sorted by the angle of `d`. Two faces leaving in one direction are
-//!   tangent along the edge: the order there needs their bends, and the result meets
-//!   itself inside a face as well, so it is [`BooleanUnsupported::NonManifold`]. An odd
-//!   count is a defect in a regular result (a closed result's edge has as many fins of
-//!   each sense); a selection that keeps laminas or sheets (BO25) may end one at the edge.
+//!   tangent along the edge (BO22): past the edge the one bending further
+//!   counter-clockwise (its normal curvature along `d`, with the use's sense) lies
+//!   further counter-clockwise, so the bends order them, in closed form on the analytic
+//!   kinds. Bends that tie are faces agreeing to second order, which may meet inside a
+//!   face as well: [`BooleanUnsupported::NonManifold`]. An odd count is a defect in a
+//!   regular result (a closed result's edge has as many fins of each sense); a selection
+//!   that keeps laminas or sheets (BO25) may end one at the edge.
 //! - **Links.** Shells meeting across a sector of such an edge are one shell: the sector is
 //!   one piece of space. A sector between a material and a void shell is a defect.
 //! - **Nesting.** Each shell gets its region from its volume's sign and the shells that
@@ -46,6 +49,9 @@ use crate::error::{BooleanDefect, BooleanError, BooleanUnsupported};
 /// Two faces leaving an edge closer than this, in radians, leave it in one direction.
 const TIED: f64 = 1e-9;
 
+/// The relative rounding of a curvature from an analytic surface's second partials.
+const CURVATURE_SLACK: f64 = 1e-9;
+
 const fn defect() -> BooleanError {
     BooleanError::Defect(BooleanDefect::Build)
 }
@@ -55,15 +61,39 @@ const fn non_manifold(at: Entity) -> BooleanError {
 }
 
 /// Lists the fins of `edge` (three or more) counter-clockwise about its direction. An odd
-/// count is a defect unless `free` (a lamina or a sheet may end at the edge).
-pub(crate) fn order_fins(draft: &mut Draft, edge: EdgeId, free: bool) -> Result<(), BooleanError> {
-    let order = radial(draft, edge, free)?;
+/// count is a defect unless `free` (a lamina or a sheet may end at the edge); `zone` is the
+/// body's resolution, how far a lift may stand from the edge where none is recorded.
+pub(crate) fn order_fins(
+    draft: &mut Draft,
+    edge: EdgeId,
+    free: bool,
+    zone: f64,
+) -> Result<(), BooleanError> {
+    let order = radial(draft, edge, free, zone)?;
     draft.adjacency_mut(edge).ok_or_else(defect)?.fins = order;
     Ok(())
 }
 
-/// The fins of `edge` in radial order.
-fn radial(draft: &Draft, edge: EdgeId, free: bool) -> Result<Vec<Fin>, BooleanError> {
+/// How a fin's face leaves the edge at its middle.
+#[derive(Debug, Clone, Copy)]
+struct Leaving {
+    fin: Fin,
+    /// The counter-clockwise angle of `d = σ N × T` from the first fin's.
+    angle: f64,
+    /// The face's bend toward the counter-clockwise side past `d`: its normal curvature
+    /// along `d`, with the use's sense. Larger is further counter-clockwise.
+    bend: f64,
+    /// The face's largest principal curvature, which bounds how far `bend` can move.
+    kmax: f64,
+}
+
+/// The fins of `edge` in radial order. Faces leaving in one direction (tangent along the
+/// edge, BO22) are ordered by their bends: past the edge the one bending further
+/// counter-clockwise lies further counter-clockwise, as scx-brep's radial check reads it.
+/// Bends that tie within what the lift's distance from the edge can move them are faces
+/// that agree to second order across the edge, so the result may meet itself inside a
+/// face: [`BooleanUnsupported::NonManifold`].
+fn radial(draft: &Draft, edge: EdgeId, free: bool, zone: f64) -> Result<Vec<Fin>, BooleanError> {
     let e = draft.edge(edge).ok_or_else(defect)?;
     if !free && e.fins().len() % 2 == 1 {
         return Err(defect());
@@ -71,57 +101,92 @@ fn radial(draft: &Draft, edge: EdgeId, free: bool) -> Result<Vec<Fin>, BooleanEr
     let Some(EdgeShape::Curve { curve, interval }) = e.shape() else {
         return Err(defect());
     };
+    let rho = e.accuracy().map_or(zone, |r| r.acc.length().mm().max(zone));
     let s = 0.5 * (interval.min() + interval.max());
     let tan = curve
         .tangent_dir(s, Approach::Above)
         .ok_or_else(defect)?
         .as_vec();
-    let mut leaving = Vec::with_capacity(e.fins().len());
+    let refuse = || non_manifold(Entity::Edge(edge));
+    let mut leaving: Vec<Leaving> = Vec::with_capacity(e.fins().len());
+    let mut e1 = None;
     for u in e.uses() {
         let u = u.ok_or_else(defect)?;
         let UseGeom::Pcurve { curve: pc, .. } = u.geom() else {
             return Err(defect());
         };
-        let n = u
-            .face()
-            .surface()
-            .normal(pc.point(s), [Approach::Above; 2])
-            .ok_or_else(|| non_manifold(Entity::Edge(edge)))?
+        let uv = pc.point(s);
+        let surface = u.face().surface();
+        let n = surface
+            .normal(uv, [Approach::Above; 2])
+            .ok_or_else(refuse)?
             .as_vec();
         let d = (n.cross(tan) * u.sense().sign())
             .normalized()
-            .ok_or_else(|| non_manifold(Entity::Edge(edge)))?
+            .ok_or_else(refuse)?
             .as_vec();
-        leaving.push((u.fin(), d));
+        let bend = surface
+            .normal_curvature(uv, [Approach::Above; 2], d)
+            .ok_or_else(refuse)?;
+        let e1 = *e1.get_or_insert(d);
+        let a = fmath::atan2(d.dot(tan.cross(e1)), d.dot(e1));
+        let angle = if a < 0.0 { a + TAU } else { a };
+        leaving.push(Leaving {
+            fin: u.fin(),
+            angle,
+            bend: bend.along * u.sense().sign(),
+            kmax: bend.largest,
+        });
     }
-    let Some(&(_, e1)) = leaving.first() else {
-        return Err(defect());
+    // Start past the widest gap, so no run of tied directions wraps round the start.
+    leaving.sort_by(|x, y| x.angle.total_cmp(&y.angle));
+    let n = leaving.len();
+    let gap = |i: usize| -> f64 {
+        let (Some(a), Some(b)) = (leaving.get(i), leaving.get((i + 1) % n)) else {
+            return 0.0;
+        };
+        let g = b.angle - a.angle;
+        if i + 1 == n { g + TAU } else { g }
     };
-    let e2 = tan.cross(e1);
-    let mut at: Vec<(f64, Fin)> = leaving
-        .iter()
-        .enumerate()
-        .map(|(i, &(fin, d))| {
-            let a = fmath::atan2(d.dot(e2), d.dot(e1));
-            let a = if i == 0 {
-                0.0
-            } else if a < 0.0 {
-                a + TAU
-            } else {
-                a
-            };
-            (a, fin)
-        })
-        .collect();
-    at.sort_by(|x, y| x.0.total_cmp(&y.0));
-    let tied = at.windows(2).any(|w| match w {
-        [(a, _), (b, _)] => b - a <= TIED,
-        _ => false,
-    }) || at.last().is_some_and(|(last, _)| TAU - last <= TIED);
-    if tied {
-        return Err(non_manifold(Entity::Edge(edge)));
+    let widest = (0..n)
+        .max_by(|&i, &j| gap(i).total_cmp(&gap(j)))
+        .ok_or_else(defect)?;
+    if gap(widest) <= TIED {
+        return Err(refuse());
     }
-    Ok(at.into_iter().map(|(_, f)| f).collect())
+    leaving.rotate_left((widest + 1) % n);
+    let base = leaving.first().map_or(0.0, |l| l.angle);
+    for l in &mut leaving {
+        let a = l.angle - base;
+        l.angle = if a < 0.0 { a + TAU } else { a };
+    }
+    // Runs of tied directions, each ordered by bend.
+    let mut order = Vec::with_capacity(n);
+    let mut run: Vec<Leaving> = Vec::new();
+    for (i, l) in leaving.iter().enumerate() {
+        run.push(*l);
+        if leaving
+            .get(i + 1)
+            .is_some_and(|m| m.angle - l.angle <= TIED)
+        {
+            continue;
+        }
+        run.sort_by(|x, y| x.bend.total_cmp(&y.bend));
+        for w in run.windows(2) {
+            if let [x, y] = w {
+                // Moving the sample by `rho` turns `d` by `kmax rho` and moves the bend by
+                // about twice `kmax^2 rho`; doubled again for the change of curvature
+                // along the surface, plus the curvatures' rounding.
+                let k = x.kmax.max(y.kmax).max(x.bend.abs()).max(y.bend.abs());
+                let slack = 4.0 * (x.kmax * x.kmax + y.kmax * y.kmax) * rho + CURVATURE_SLACK * k;
+                if y.bend - x.bend <= slack {
+                    return Err(refuse());
+                }
+            }
+        }
+        order.extend(run.drain(..).map(|l| l.fin));
+    }
+    Ok(order)
 }
 
 /// The face side a fin's sector comes after, turning about the edge: a forward use's

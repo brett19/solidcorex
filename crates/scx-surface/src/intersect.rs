@@ -84,6 +84,8 @@ use crate::error::SurfaceError;
 use crate::surface::Surface;
 use scx_curve::arcs::Arcs;
 
+mod nurbs_curve;
+
 /// How the curve meets the surface at a point.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Contact {
@@ -141,8 +143,13 @@ impl CurveSurfaceHit {
 ///
 /// # Errors
 ///
-/// - [`SurfaceError::NurbsIntersection`] (Unsupported) when the curve or the surface is a
-///   NURBS one: not built yet, never an empty answer.
+/// - [`SurfaceError::NurbsIntersection`] (Unsupported) when both are NURBS: not built
+///   yet, never an empty answer. A NURBS curve against an analytic surface is answered span
+///   by span (`nurbs_curve`, research 77 RY1); an analytic curve on a NURBS surface is
+///   searched by certified boxes over its Bézier patches (`nurbs_hits`, research 77 §6.3).
+/// - [`SurfaceError::Undecided`] (Unsupported) where a NURBS curve's root near `t` cannot be
+///   certified at the resolution, or the patch search cannot decide a box down to it (a ray
+///   through a pole): never a lost hit or an empty answer.
 /// - [`SurfaceError::Exhausted`] when `budget` runs out, [`SurfaceError::Stopped`] when
 ///   `stop` is set; neither returns a partial answer.
 pub fn intersect_curve(
@@ -154,21 +161,26 @@ pub fn intersect_curve(
     budget: &mut Budget,
     stop: &Stop,
 ) -> Result<Vec<CurveSurfaceHit>, SurfaceError> {
+    if let (Surface::Nurbs(n), false) = (s, matches!(c, Curve::Nurbs(_))) {
+        return crate::nurbs_hits::intersect(c, ce, s, n, se, res, budget, stop);
+    }
     let Some(target) = Target::of(s) else {
         return Err(SurfaceError::NurbsIntersection);
     };
-    let Some(path) = Path::of(c, ce) else {
-        return Err(SurfaceError::NurbsIntersection);
+    let found = match (c, Path::of(c, ce)) {
+        (_, Some(path)) => isolate(c, ce, &path, &target, se, res, budget, stop)?,
+        (Curve::Nurbs(n), None) => {
+            nurbs_curve::isolate(n, c, ce, s, &target, se, res, budget, stop)?
+        }
+        (_, None) => return Err(SurfaceError::NurbsIntersection),
     };
-    Ok(
-        match isolate(c, ce, &path, &target, se, res, budget, stop)? {
-            OnSurface::Proved(t) | OnSurface::Isolated(t) => t
-                .into_iter()
-                .map(|t| CurveSurfaceHit::Overlap { t })
-                .collect(),
-            OnSurface::Leaves(hits) => hits,
-        },
-    )
+    Ok(match found {
+        OnSurface::Proved(t) | OnSurface::Isolated(t) => t
+            .into_iter()
+            .map(|t| CurveSurfaceHit::Overlap { t })
+            .collect(),
+        OnSurface::Leaves(hits) => hits,
+    })
 }
 
 /// What [`curve_on_surface`] found of a curve stated to lie on a surface.
@@ -212,11 +224,37 @@ pub fn curve_on_surface(
     budget: &mut Budget,
     stop: &Stop,
 ) -> Result<OnSurface, SurfaceError> {
+    if let (Surface::Nurbs(n), false) = (s, matches!(c, Curve::Nurbs(_))) {
+        let hits = crate::nurbs_hits::intersect(c, ce, s, n, se, res, budget, stop)?;
+        let overlaps: Option<Vec<Extent1d>> = hits
+            .iter()
+            .map(|h| match h {
+                CurveSurfaceHit::Overlap { t } => Some(*t),
+                CurveSurfaceHit::Point { .. } => None,
+            })
+            .collect();
+        return Ok(match overlaps {
+            Some(t) if !t.is_empty() => OnSurface::Isolated(t),
+            _ => OnSurface::Leaves(hits),
+        });
+    }
     let Some(target) = Target::of(s) else {
         return Err(SurfaceError::NurbsIntersection);
     };
     let Some(path) = Path::of(c, ce) else {
-        return Err(SurfaceError::NurbsIntersection);
+        let Curve::Nurbs(n) = c else {
+            return Err(SurfaceError::NurbsIntersection);
+        };
+        if let Some((height, rounding)) = nurbs_curve::plane_height(n, ce, &target) {
+            stop.check().map_err(|_| SurfaceError::Stopped)?;
+            budget.charge(1).map_err(SurfaceError::Exhausted)?;
+            if height <= res.zone().mm() - rounding {
+                return Ok(OnSurface::Proved(nurbs_curve::clip_whole(
+                    c, n, ce, &target, se,
+                )));
+            }
+        }
+        return nurbs_curve::isolate(n, c, ce, s, &target, se, res, budget, stop);
     };
     if let Some(height) = path.plane_height(&target) {
         stop.check().map_err(|_| SurfaceError::Stopped)?;
@@ -901,7 +939,7 @@ impl Target {
                     small: c.minor().mm(),
                 },
             ),
-            Surface::Nurbs(_) => return None,
+            Surface::Nurbs(_) | Surface::Procedural(_) => return None,
         };
         Some(Self { axes, shape })
     }

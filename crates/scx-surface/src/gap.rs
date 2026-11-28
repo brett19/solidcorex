@@ -47,12 +47,13 @@
 //! | `seam_bound::seam_angle_*`: a seam's largest normal angle | not here yet (74 §17) |
 //! | `MAX_PIECES = 1 << 15`, `MAX_PATCHES = 4096` | the caller's [`Budget`]: one unit per point evaluated |
 //!
-//! NURBS surfaces are [`GapError::Pending`]: their point distance is [`Surface::invert`]'s, but
-//! the bound over a piece (the chain rule through `partials_over_piece`) is not built.
+//! **A NURBS surface** (77 FT4, [`nurbs`]): the same search, a piece's bound through the
+//! surface's partials over the piece's uv box (`partials_over_piece` on each knot piece the
+//! box meets, hulled) by the chain rule; a point's distance from the surface through
+//! [`Surface::invert`]'s certified nearest, and a piece's through the feet of its ends.
 
 use core::cmp::Ordering;
 use core::fmt;
-use core::ops::{Add, Div, Mul, Sub};
 use std::collections::BinaryHeap;
 
 use scx_curve::arcs::Arcs;
@@ -62,6 +63,7 @@ use scx_num::error::ErrorKind;
 use scx_num::extent1d::Extent1d;
 use scx_num::extent2d::Extent2d;
 use scx_num::interval::{Ivl, round_down, round_up};
+use scx_num::jet::{Jet2, chord, norm, square as sq, vector_bound};
 use scx_num::ring::Ring;
 use scx_num::trig::Trig;
 use scx_num::vector2d::Point2;
@@ -192,14 +194,9 @@ pub enum Short {
     Stopped,
     /// The pieces that keep the bracket open cannot be cut finer in floating point.
     Precision,
-}
-
-/// A geometry whose gap bound is not built yet.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[non_exhaustive]
-pub enum Pending {
-    /// A NURBS surface: the bound over a piece through its partials.
-    NurbsSurface,
+    /// A search inside the gap's (the nearest point of a NURBS surface) failed: the
+    /// kernel's own fault.
+    Defect(&'static str),
 }
 
 /// Why a gap has no bracket that meets its aim.
@@ -213,8 +210,6 @@ pub enum GapError {
         /// Why it ended.
         why: Short,
     },
-    /// The geometry's bound is not built (74 analytic first).
-    Pending(Pending),
     /// The range is not finite, or the geometry over it cannot be enclosed (a value
     /// overflows).
     NotFinite,
@@ -224,6 +219,9 @@ pub enum GapError {
         /// The value given.
         value: f64,
     },
+    /// The surface is procedural: its gap would be its exact net's, widened by the net's
+    /// bound, and that arm is not built.
+    Procedural,
 }
 
 impl GapError {
@@ -243,7 +241,11 @@ impl GapError {
                 why: Short::Precision,
                 ..
             }
-            | Self::Pending(_) => ErrorKind::Unsupported,
+            | Self::Procedural => ErrorKind::Unsupported,
+            Self::Undecided {
+                why: Short::Defect(_),
+                ..
+            } => ErrorKind::Defect,
             Self::NotFinite | Self::BadAim { .. } => ErrorKind::Refused,
         }
     }
@@ -264,9 +266,13 @@ impl GapError {
                 why: Short::Precision,
                 ..
             } => "gap_precision",
-            Self::Pending(Pending::NurbsSurface) => "gap_pending_nurbs_surface",
+            Self::Undecided {
+                why: Short::Defect(_),
+                ..
+            } => "gap_defect",
             Self::NotFinite => "gap_not_finite",
             Self::BadAim { .. } => "gap_bad_aim",
+            Self::Procedural => "gap_procedural",
         }
     }
 }
@@ -279,6 +285,7 @@ impl fmt::Display for GapError {
                     Short::Exhausted(_) => "the budget ran out",
                     Short::Stopped => "it was stopped",
                     Short::Precision => "floating point cannot cut finer",
+                    Short::Defect(reason) => reason,
                 };
                 write!(
                     f,
@@ -286,13 +293,11 @@ impl fmt::Display for GapError {
                     reached.lower, reached.upper
                 )
             }
-            Self::Pending(Pending::NurbsSurface) => {
-                f.write_str("a gap to a NURBS surface is not bounded yet")
-            }
             Self::NotFinite => f.write_str("the range or the geometry over it is not finite"),
             Self::BadAim { value } => {
                 write!(f, "the aim {value} is not a valid width or allowance")
             }
+            Self::Procedural => f.write_str("the gap to a procedural surface is not built"),
         }
     }
 }
@@ -300,123 +305,8 @@ impl fmt::Display for GapError {
 impl std::error::Error for GapError {}
 
 // ---------------------------------------------------------------------------------------
-// Second-order forward differentiation in intervals.
-
-/// A value and its first two derivatives in one variable, each enclosed over an interval
-/// of it: a [`Ring`], so the kinds' `eval` runs in it (the chain rule for free).
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub(crate) struct Jet2 {
-    pub(crate) f: Ivl,
-    pub(crate) d1: Ivl,
-    pub(crate) d2: Ivl,
-}
-
-impl Jet2 {
-    fn new(f: Ivl, d1: Ivl, d2: Ivl) -> Self {
-        Self { f, d1, d2 }
-    }
-
-    /// Encloses both.
-    fn hull(self, o: Self) -> Self {
-        Self::new(self.f.hull(o.f), self.d1.hull(o.d1), self.d2.hull(o.d2))
-    }
-
-    /// A constant enclosed by `f`.
-    fn lift_ivl(f: Ivl) -> Self {
-        Self::new(f, Ivl::from(0.0), Ivl::from(0.0))
-    }
-
-    fn scale(self, k: f64) -> Self {
-        let k = Ivl::from(k);
-        Self::new(self.f * k, self.d1 * k, self.d2 * k)
-    }
-
-    /// `sqrt(self)`: the derivatives are whole where the value may be zero.
-    fn sqrt(self) -> Self {
-        let s = self.f.sqrt();
-        let two_s = Ivl::from(2.0) * s;
-        let d1 = self.d1 / two_s;
-        let d2 = (self.d2 - Ivl::from(2.0) * d1 * d1) / two_s;
-        Self::new(s, d1, d2)
-    }
-}
-
-impl Add for Jet2 {
-    type Output = Self;
-    fn add(self, b: Self) -> Self {
-        Self::new(self.f + b.f, self.d1 + b.d1, self.d2 + b.d2)
-    }
-}
-
-impl Sub for Jet2 {
-    type Output = Self;
-    fn sub(self, b: Self) -> Self {
-        Self::new(self.f - b.f, self.d1 - b.d1, self.d2 - b.d2)
-    }
-}
-
-impl Mul for Jet2 {
-    type Output = Self;
-    fn mul(self, b: Self) -> Self {
-        let two = Ivl::from(2.0);
-        Self::new(
-            self.f * b.f,
-            self.d1 * b.f + self.f * b.d1,
-            self.d2 * b.f + two * self.d1 * b.d1 + self.f * b.d2,
-        )
-    }
-}
-
-impl Div for Jet2 {
-    type Output = Self;
-    fn div(self, b: Self) -> Self {
-        let q = self.f / b.f;
-        let d1 = (self.d1 - q * b.d1) / b.f;
-        let d2 = (self.d2 - Ivl::from(2.0) * d1 * b.d1 - q * b.d2) / b.f;
-        Self::new(q, d1, d2)
-    }
-}
-
-impl Ring for Jet2 {
-    fn lift(d: f64) -> Self {
-        Self::new(Ivl::from(d), Ivl::from(0.0), Ivl::from(0.0))
-    }
-}
-
-/// `[x^2]`, not below zero.
-fn sq(x: Ivl) -> Ivl {
-    let (m, g) = (x.mig(), x.mag());
-    Ivl::new(round_down(m * m).max(0.0), round_up(g * g))
-}
-
-/// `[|v|]` of an interval vector.
-fn norm(v: [Ivl; 3]) -> Ivl {
-    (sq(v[0]) + sq(v[1]) + sq(v[2])).sqrt()
-}
-
-/// `|g|` over a piece by the chord bound and the direct enclosure, the smaller; infinite
-/// when neither is finite.
-fn chord(ends: (Ivl, Ivl), d2: f64, over: Ivl, h: f64) -> f64 {
-    let ends = ends.0.mag().max(ends.1.mag());
-    let bound = round_up(ends + round_up(round_up(h * h) * d2 / 8.0));
-    let direct = over.mag();
-    let b = bound.min(direct);
-    if b.is_nan() { f64::INFINITY } else { b }
-}
-
-/// `|D|` over a piece from the jets of a vector `D` over it and `|D|` at its ends: the chord
-/// bound on `D` itself, the chord bound on `q = |D|^2` (whose second derivative
-/// `2 (|D'|^2 + D . D'')` stays small where `|D|` is near constant though `D` turns), and
-/// the direct enclosure, the smallest.
-fn vector_bound(d: [Jet2; 3], ends: (Ivl, Ivl), h: f64) -> f64 {
-    let natural = norm([d[0].f, d[1].f, d[2].f]);
-    let by_d = chord(ends, norm([d[0].d2, d[1].d2, d[2].d2]).mag(), natural, h);
-    let q = d[0] * d[0] + d[1] * d[1] + d[2] * d[2];
-    let end = ends.0.mag().max(ends.1.mag());
-    let qb = round_up(round_up(end * end) + round_up(round_up(h * h) * q.d2.mag() / 8.0));
-    let by_q = round_up(qb.sqrt());
-    if by_q.is_nan() { by_d } else { by_d.min(by_q) }
-}
+// Second-order forward differentiation in intervals: [`Jet2`] and the bounds from it live in
+// `scx_num::jet` (moved there for FT3's fit certificate, 77 §1.1).
 
 fn jets3(p: Point3<Ivl>, d1: Vec3<Ivl>, d2: Vec3<Ivl>) -> [Jet2; 3] {
     [
@@ -1001,9 +891,10 @@ impl Field for ToSurface<'_> {
     }
 }
 
-/// The kind of an analytic surface and its frame's axes, or pending.
-fn kind_of(s: &Surface) -> Result<(Kind, Axes), GapError> {
-    Ok(match s {
+/// The kind of an analytic surface and its frame's axes; `None` for a NURBS surface (its
+/// own arm, [`nurbs`]).
+fn kind_of(s: &Surface) -> Option<(Kind, Axes)> {
+    Some(match s {
         Surface::Plane(p) => (
             Kind::Plane,
             Axes::new(p.frame(), scx_num::frame::Sense::Forward),
@@ -1024,7 +915,7 @@ fn kind_of(s: &Surface) -> Result<(Kind, Axes), GapError> {
             },
             k.axes(),
         ),
-        Surface::Nurbs(_) => return Err(GapError::Pending(Pending::NurbsSurface)),
+        Surface::Nurbs(_) | Surface::Procedural(_) => return None,
     })
 }
 
@@ -1034,8 +925,9 @@ fn kind_of(s: &Surface) -> Result<(Kind, Axes), GapError> {
 /// # Errors
 ///
 /// [`GapError::Undecided`] with the bracket reached when the budget runs out, `stop` is
-/// set or floating point cannot cut finer; [`GapError::Pending`] for a NURBS surface;
-/// [`GapError::NotFinite`] for an infinite range; [`GapError::BadAim`].
+/// set or floating point cannot cut finer (on a NURBS surface, also when the nearest
+/// point search runs out or fails); [`GapError::NotFinite`] for an infinite range;
+/// [`GapError::BadAim`]; [`GapError::Procedural`] for a procedural surface.
 pub fn curve_surface_gap(
     curve: &Curve,
     over: &Extent1d,
@@ -1046,18 +938,28 @@ pub fn curve_surface_gap(
 ) -> Result<Bracket, GapError> {
     let aim = aim.check()?;
     let (lo, hi) = range(over)?;
-    let (kind, axes) = kind_of(surface)?;
+    let cuts = cuts_of(lo, hi, &knots3(curve));
+    let Some((kind, axes)) = kind_of(surface) else {
+        if matches!(surface, Surface::Procedural(_)) {
+            return Err(GapError::Procedural);
+        }
+        let Surface::Nurbs(n) = surface else {
+            return Err(GapError::Undecided {
+                reached: Bracket {
+                    lower: 0.0,
+                    upper: f64::INFINITY,
+                },
+                why: Short::Defect("a surface kind with no gap arm"),
+            });
+        };
+        let field = nurbs::CurveToNurbs::new(curve, n);
+        return distance(search(&field, &cuts, aim, budget, stop));
+    };
     let field = ToSurface {
         src: Source::new(curve, axes),
         kind,
     };
-    distance(search(
-        &field,
-        &cuts_of(lo, hi, &knots3(curve)),
-        aim,
-        budget,
-        stop,
-    ))
+    distance(search(&field, &cuts, aim, budget, stop))
 }
 
 // ---------------------------------------------------------------------------------------
@@ -1070,7 +972,7 @@ fn arcs_of(s: &Surface) -> (Option<Arcs>, Option<Arcs>) {
         Surface::Cone(_) => (Some(cone::U), None),
         Surface::Sphere(_) => (Some(sphere::U), Some(sphere::V)),
         Surface::Torus(_) => (Some(torus::TURN), Some(torus::TURN)),
-        Surface::Plane(_) | Surface::Nurbs(_) => (None, None),
+        Surface::Plane(_) | Surface::Nurbs(_) | Surface::Procedural(_) => (None, None),
     }
 }
 
@@ -1104,7 +1006,7 @@ fn eval_jet(s: &Surface, u: Jet2, v: Jet2, near: Point2) -> Option<[Jet2; 3]> {
         Surface::Cone(k) => k.eval(u, v, near),
         Surface::Sphere(k) => k.eval(u, v, near),
         Surface::Torus(k) => k.eval(u, v, near),
-        Surface::Nurbs(_) => return None,
+        Surface::Nurbs(_) | Surface::Procedural(_) => return None,
     };
     Some([p.x, p.y, p.z])
 }
@@ -1289,7 +1191,9 @@ impl Lift {
                                 let r = Ivl::from(s.minor().mm());
                                 (s.axes(), Ivl::from(s.major().mm()) + r * cw, r * sw)
                             }
-                            Surface::Plane(_) | Surface::Nurbs(_) => return None,
+                            Surface::Plane(_) | Surface::Nurbs(_) | Surface::Procedural(_) => {
+                                return None;
+                            }
                         };
                         let pad = round_up(2.0 * f.mag() * angle_pad(k));
                         Some(Self::of(&axes, konst(f), konst(g), cs, &c, pad))
@@ -1455,11 +1359,15 @@ pub fn pcurve_edge_gap(
 ) -> Result<Bracket, GapError> {
     let aim = aim.check()?;
     let (lo, hi) = range(over)?;
-    if matches!(surface, Surface::Nurbs(_)) {
-        return Err(GapError::Pending(Pending::NurbsSurface));
+    if matches!(surface, Surface::Procedural(_)) {
+        return Err(GapError::Procedural);
     }
     let mut breaks = knots3(curve);
     breaks.extend(knots2(pcurve));
+    if let Surface::Nurbs(n) = surface {
+        let field = nurbs::PcurveOnNurbs { n, pcurve, curve };
+        return distance(search(&field, &cuts_of(lo, hi, &breaks), aim, budget, stop));
+    }
     let field = PcurveField {
         surface,
         pcurve,
@@ -1741,6 +1649,8 @@ pub fn curve_curve_gap(
         stop,
     ))
 }
+
+mod nurbs;
 
 #[cfg(test)]
 mod tests;

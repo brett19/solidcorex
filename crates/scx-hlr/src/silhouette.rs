@@ -249,11 +249,11 @@ impl Silhouette {
 }
 
 /// One face's work.
-struct Run<'a, 'b> {
-    face: Face<'a>,
-    res: Resolution,
-    budget: &'b mut Budget,
-    stop: &'b Stop,
+pub(crate) struct Run<'a, 'b> {
+    pub(crate) face: Face<'a>,
+    pub(crate) res: Resolution,
+    pub(crate) budget: &'b mut Budget,
+    pub(crate) stop: &'b Stop,
 }
 
 /// A boundary edge of a face (used once by it) with a curve.
@@ -306,13 +306,10 @@ fn locate(curve: &SilhouetteCurve, p: Point3) -> (f64, f64) {
 }
 
 impl Run<'_, '_> {
-    /// The face's silhouettes, or why it has none computed.
-    fn face(&mut self, view: &View) -> Result<Result<Vec<Silhouette>, Why>, HlrError> {
+    /// The face's quadric (recognised, for a NURBS face), or why it has none.
+    pub(crate) fn quadric(&mut self) -> Result<Result<Quadric, Why>, HlrError> {
         let face = self.face;
         let id = face.id();
-        if matches!(face.surface(), Surface::Plane(_)) {
-            return Ok(Ok(Vec::new()));
-        }
         let (Some(uv), Some(fbox)) = (face.uv_box(), face.bounding_box()) else {
             return Ok(Err(Why::Unbounded));
         };
@@ -350,30 +347,46 @@ impl Run<'_, '_> {
             Exactness::Exact => tol,
             Exactness::Recognized { deviation } => tol.with_deviation(deviation.mm()),
         };
+        Ok(Ok(Quadric {
+            surface,
+            accuracy,
+            tol,
+            fbox,
+            uv,
+        }))
+    }
+
+    /// The face's silhouettes, or why it has none computed.
+    fn face(&mut self, view: &View) -> Result<Result<Vec<Silhouette>, Why>, HlrError> {
+        let face = self.face;
+        let id = face.id();
+        if matches!(face.surface(), Surface::Plane(_)) {
+            return Ok(Ok(Vec::new()));
+        }
+        let q = match self.quadric()? {
+            Ok(q) => q,
+            Err(why) => return Ok(Err(why)),
+        };
+        let Quadric {
+            surface,
+            accuracy,
+            tol,
+            fbox,
+            uv,
+        } = q;
         let rims = rims(face, &tol);
         let candidates = match &surface {
             Surface::Plane(_) => Vec::new(),
-            Surface::Cylinder(c) => {
-                let f = c.frame();
-                ruled(id, f.origin(), f.z(), c.radius().mm(), 0.0, view, &fbox)?
-            }
-            Surface::Cone(c) => {
-                let f = c.frame();
-                let a = f.z() * c.sense().sign();
-                let axis = a.normalized().ok_or(HlrError::Defect {
-                    reason: "a cone's axis has no direction",
-                })?;
-                let k = fmath::tan(c.half_angle());
-                ruled(id, f.origin(), axis, c.radius().mm(), k, view, &fbox)?
-            }
-            Surface::Sphere(s) => sphere(id, s.frame().origin(), s.radius().mm(), view)?,
             Surface::Torus(t) => contour::candidates(id, t, view, &rims)?,
-            // A NURBS surface `recognize` left as one, or a kind added later.
-            _ => return Ok(Err(Why::Freeform)),
+            s => match ruled_or_round(id, s, view, &fbox)? {
+                Some(c) => c,
+                // A NURBS surface `recognize` left as one, or a kind added later.
+                None => return Ok(Err(Why::Freeform)),
+            },
         };
         let mut out = Vec::with_capacity(candidates.len());
         for cand in candidates {
-            let on_face = self.trim(&cand, &rims, &uv, &fbox)?;
+            let on_face = self.trim(&cand, &rims, &uv, &fbox, tol.near(None))?;
             // A candidate wholly off the face is not one of its silhouettes.
             if matches!(&on_face, OnFace::Proved(p) if p.is_empty()) {
                 continue;
@@ -388,13 +401,16 @@ impl Run<'_, '_> {
         Ok(Ok(out))
     }
 
-    /// The part of `cand` on the face.
+    /// The part of `cand` on the face. A point of `cand` on the face lies within `near` of
+    /// the face's surface; one farther off is off the face, even where the surface's foot
+    /// lies in its domain (a NURBS patch's foot is clamped to its edge).
     fn trim(
         &mut self,
         cand: &Candidate,
         rims: &[Rim<'_>],
         uv: &Extent2d,
         fbox: &Extent3d,
+        near: f64,
     ) -> Result<OnFace, HlrError> {
         let splits = match &cand.splitter {
             Splitter::Found(found) => found.clone(),
@@ -420,6 +436,8 @@ impl Run<'_, '_> {
                 .map_err(|e| HlrError::surface(id, e))?;
             Ok(match inv {
                 Inversion::Outside(_) => Some(false),
+                Inversion::Inside(foot) if foot.distance.is_nan() => None,
+                Inversion::Inside(foot) if foot.distance > near => Some(false),
                 Inversion::Inside(foot) => match face.contains_uv(foot.at) {
                     Some(UvSide::Inside | UvSide::Near) => Some(true),
                     Some(UvSide::Outside) => Some(false),
@@ -450,30 +468,19 @@ impl Run<'_, '_> {
         rims: &[Rim<'_>],
         fbox: &Extent3d,
     ) -> Result<Result<Vec<f64>, Undecided>, HlrError> {
-        let id = self.face.id();
-        let plane = Surface::Plane(Plane::new(*frame));
-        // The plane's uv box: wide enough to hold every point of the face, whose boundary
-        // edges lie in its box.
-        let half = 2.0 * fbox.max_distance_to_point(frame.origin()) + self.res.zone().mm();
-        let se = Extent2d::from_bounds(-half, -half, half, half).ok_or(HlrError::Defect {
-            reason: "a face box's span is not finite",
-        })?;
         let mut splits = Vec::new();
         for rim in rims {
-            let hits = match intersect_curve(
-                rim.curve,
-                &rim.interval,
-                &plane,
-                &se,
+            let hits = match plane_hits(
+                self.face.id(),
+                rim,
+                frame,
+                fbox,
                 self.res,
                 self.budget,
                 self.stop,
-            ) {
+            )? {
                 Ok(h) => h,
-                Err(SurfaceError::NurbsIntersection) => {
-                    return Ok(Err(Undecided::NurbsEdge { edge: rim.edge }));
-                }
-                Err(e) => return Err(HlrError::surface(id, e)),
+                Err(why) => return Ok(Err(why)),
             };
             let mut at = |p: Point3| {
                 let (t, dist) = locate(curve, p);
@@ -492,6 +499,70 @@ impl Run<'_, '_> {
             }
         }
         Ok(Ok(splits))
+    }
+}
+
+/// A face's surface as the closed forms see it: recognised if it was a NURBS surface, with
+/// how exactly, the tolerances, and the face's boxes.
+pub(crate) struct Quadric {
+    pub(crate) surface: Surface,
+    pub(crate) accuracy: Exactness,
+    pub(crate) tol: Tolerances,
+    pub(crate) fbox: Extent3d,
+    pub(crate) uv: Extent2d,
+}
+
+/// The silhouette candidates of a cylinder, cone or sphere; `None` for any other surface.
+pub(crate) fn ruled_or_round(
+    id: FaceId,
+    surface: &Surface,
+    view: &View,
+    fbox: &Extent3d,
+) -> Result<Option<Vec<Candidate>>, HlrError> {
+    Ok(Some(match surface {
+        Surface::Cylinder(c) => {
+            let f = c.frame();
+            ruled(id, f.origin(), f.z(), c.radius().mm(), 0.0, view, fbox)?
+        }
+        Surface::Cone(c) => {
+            let f = c.frame();
+            let a = f.z() * c.sense().sign();
+            let axis = a.normalized().ok_or(HlrError::Defect {
+                reason: "a cone's axis has no direction",
+            })?;
+            let k = fmath::tan(c.half_angle());
+            ruled(id, f.origin(), axis, c.radius().mm(), k, view, fbox)?
+        }
+        Surface::Sphere(s) => sphere(id, s.frame().origin(), s.radius().mm(), view)?,
+        _ => return Ok(None),
+    }))
+}
+
+/// Every place where `rim` meets the plane of `frame`: the crossings of a boundary edge
+/// with a plane that cuts the face's surface in the curve of interest. `Undecided` for an
+/// edge `intersect_curve` cannot take or decide (a NURBS root it cannot certify).
+pub(crate) fn plane_hits(
+    id: FaceId,
+    rim: &Rim<'_>,
+    frame: &Frame,
+    fbox: &Extent3d,
+    res: Resolution,
+    budget: &mut Budget,
+    stop: &Stop,
+) -> Result<Result<Vec<CurveSurfaceHit>, Undecided>, HlrError> {
+    let plane = Surface::Plane(Plane::new(*frame));
+    // The plane's uv box: wide enough to hold every point of the face, whose boundary
+    // edges lie in its box.
+    let half = 2.0 * fbox.max_distance_to_point(frame.origin()) + res.zone().mm();
+    let se = Extent2d::from_bounds(-half, -half, half, half).ok_or(HlrError::Defect {
+        reason: "a face box's span is not finite",
+    })?;
+    match intersect_curve(rim.curve, &rim.interval, &plane, &se, res, budget, stop) {
+        Ok(h) => Ok(Ok(h)),
+        Err(SurfaceError::NurbsIntersection | SurfaceError::Undecided { .. }) => {
+            Ok(Err(Undecided::NurbsEdge { edge: rim.edge }))
+        }
+        Err(e) => Err(HlrError::surface(id, e)),
     }
 }
 

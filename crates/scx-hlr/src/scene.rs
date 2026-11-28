@@ -15,6 +15,7 @@ use scx_num::frame::Frame;
 use scx_num::vector3d::Point3;
 
 use crate::error::HlrError;
+use crate::outline::{self, Outline};
 use crate::silhouette::{Silhouettes, of_body};
 use crate::view::{View, place_point};
 
@@ -100,6 +101,26 @@ impl Scene<'_> {
                 curves,
                 unsupported: found.unsupported,
             });
+        }
+        Ok(out)
+    }
+
+    /// Every body's outline stretches under `view`, in world coordinates, in the scene's
+    /// order, on one budget.
+    ///
+    /// # Errors
+    ///
+    /// As [`crate::outline`]; [`HlrError::BadPlacement`] when the view cannot be carried
+    /// into a body's frame.
+    pub fn outlines(&self, view: &View, cx: &mut Cx<'_>) -> Result<Vec<Outline>, HlrError> {
+        let mut budget = cx.budget();
+        let mut out = Vec::with_capacity(self.bodies.len());
+        for (i, (body, frame)) in self.bodies.iter().enumerate() {
+            let local = view
+                .in_frame(frame)
+                .ok_or(HlrError::BadPlacement { body: i })?;
+            let found = outline::of_body(body, &local, &mut budget, cx.stop, cx.trace)?;
+            out.push(found.placed(frame));
         }
         Ok(out)
     }

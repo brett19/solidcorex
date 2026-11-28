@@ -1287,18 +1287,14 @@ fn scx_dimension(d: scx_make::Dimension) -> Option<Dimension> {
 
 /// Whether scx's error is the outcome truth states for a constructor.
 fn scx_outcome_matches(e: &scx_make::MakeError, want: &Outcome) -> bool {
-    use scx_make::{MakeError as E, Refusal as R, Unsupported as U};
+    use scx_make::{MakeError as E, Refusal as R};
     match (e, want) {
         (E::Refused(R::Size { dimension, .. }), Outcome::Refused(Refusal::Size(d))) => {
             scx_dimension(*dimension) == Some(*d)
         }
         (E::Refused(R::ZeroRadii), Outcome::Refused(Refusal::NoBody))
         | (E::Refused(R::SelfIntersecting { .. }), Outcome::Refused(Refusal::SelfIntersecting))
-        | (E::Refused(R::Span { .. }), Outcome::Refused(Refusal::Span))
-        | (
-            E::Unsupported(U::HornTorus { .. }),
-            Outcome::Unsupported(RecipeUnsupported::HornTorus),
-        ) => true,
+        | (E::Refused(R::Span { .. }), Outcome::Refused(Refusal::Span)) => true,
         _ => false,
     }
 }
@@ -1481,6 +1477,8 @@ fn scx_topology(b: &scx_brep::Brep, t: &Topology) -> Verdict {
     let mut kept: Vec<Vec<[scx_brep::VertexId; 2]>> = vec![Vec::new(); faces.len()];
     let mut ends: BTreeSet<(usize, scx_brep::VertexId)> = BTreeSet::new();
     let mut edges = 0i64;
+    // Faces with a kept edge: a point loop alone does not cut a torus (BO22's sphere touch).
+    let mut cut = vec![false; faces.len()];
     // A touch inside a face (BO25) is a loop of one collapsed edge, or, where it falls on a
     // seam or a pole, a vertex of those: truth counts it as a vertex of each sheet it is in
     // and a point loop of each patch.
@@ -1513,6 +1511,7 @@ fn scx_topology(b: &scx_brep::Brep, t: &Topology) -> Verdict {
         }
         for &f in &fins {
             kept[f].push(e.ends());
+            cut[f] = true;
         }
         if let [a, c] = fins.as_slice()
             && faces[*a].surface() == faces[*c].surface()
@@ -1542,8 +1541,7 @@ fn scx_topology(b: &scx_brep::Brep, t: &Topology) -> Verdict {
                 .len() as i64
         })
         .collect();
-    let genus_f =
-        |i: usize| i64::from(bounds[i] == 0 && matches!(faces[i].surface(), Surface::Torus(_)));
+    let genus_f = |i: usize| i64::from(!cut[i] && matches!(faces[i].surface(), Surface::Torus(_)));
     let fsum: i64 = (0..faces.len())
         .map(|i| 2 - 2 * genus_f(i) - bounds[i])
         .sum();

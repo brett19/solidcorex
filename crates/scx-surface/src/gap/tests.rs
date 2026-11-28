@@ -312,24 +312,145 @@ fn a_nurbs_curve_bowing_over_a_plane_is_its_height() {
     );
 }
 
-#[test]
-fn a_nurbs_surface_is_pending() {
-    let f = tilted();
-    let n = Plane::new(f)
-        .to_nurbs(&Extent2d::from_bounds(-1.0, -1.0, 1.0, 1.0).unwrap())
-        .unwrap();
-    let s = Surface::Nurbs(Arc::new(n));
-    let c = line(at(&f, 0.0, 0.0, 1.0), *f.x());
-    let mut budget = Budget::new(100);
-    let e = curve_surface_gap(
-        &c,
-        &over(0.0, 1.0),
-        &s,
-        Aim::Width(W),
-        &mut budget,
-        &Stop::new(),
+// NURBS surfaces (77 FT4).
+
+fn nurbs_of(s: &Surface, uv: (f64, f64, f64, f64)) -> Surface {
+    let e = Extent2d::from_bounds(uv.0, uv.1, uv.2, uv.3).unwrap();
+    Surface::Nurbs(Arc::new(s.to_nurbs(&e).unwrap()))
+}
+
+/// The gap aimed at width `w`, with a budget a nearest point search per point fits.
+fn ngap(c: &Curve, o: Extent1d, s: &Surface, w: f64) -> Bracket {
+    let mut budget = Budget::new(50_000_000);
+    curve_surface_gap(c, &o, s, Aim::Width(w), &mut budget, &Stop::new()).unwrap()
+}
+
+/// As [`holds`], at most `w` wide.
+fn holds_within(b: Bracket, truth: f64, w: f64) {
+    let slack = 1e-12 * (1.0 + truth.abs());
+    assert!(
+        b.lower() <= truth + slack && truth <= b.upper() + slack,
+        "{b:?} does not hold {truth}"
     );
-    assert_eq!(e, Err(GapError::Pending(Pending::NurbsSurface)));
+    assert!(b.width() <= w, "{b:?} wider than {w}");
+}
+
+#[test]
+fn a_line_over_a_bilinear_plane_patch_is_its_height() {
+    let f = tilted();
+    let s = nurbs_of(&plane(f), (-1.0, -1.0, 1.0, 1.0));
+    let Surface::Nurbs(n) = &s else {
+        unreachable!()
+    };
+    assert!(!n.is_rational());
+    for h in [2.5, 1e-6, 0.0] {
+        let c = line(at(&f, -0.8, -0.5, h), *f.x() + *f.y() * 0.5);
+        holds(ngap(&c, over(0.0, 1.5), &s, W), h);
+    }
+    // A slant line from the patch: the far end.
+    let d = line(at(&f, -0.5, 0.0, 0.0), *f.x() + *f.z() * 0.25);
+    holds(ngap(&d, over(0.0, 1.2), &s, W), 0.3);
+}
+
+#[test]
+fn circles_on_and_off_a_rational_sphere() {
+    let f = tilted();
+    let r = 2.0;
+    let s = nurbs_of(&sphere(f, r), (0.0, 0.0, 1.0, 1.0));
+    let Surface::Nurbs(n) = &s else {
+        unreachable!()
+    };
+    assert!(n.is_rational());
+    let (z, rho) = (1.0, 3.0_f64.sqrt());
+    // A short arc to the test's width, and the whole circle across every knot line and the
+    // seam to a coarser one: the points a width needs grow as its inverse square root (the
+    // linear correspondence's error is quadratic), each a nearest point search.
+    for (o, w) in [(over(0.2, 0.5), W), (over(0.0, TAU), 1e-6)] {
+        let on = ngap(&circle(&f, (0.0, 0.0, z), rho), o, &s, w);
+        holds_within(on, 0.0, w);
+        // Out radially by `h`: every point `h` farther from the centre.
+        for h in [1e-3, 0.25] {
+            let k = (r + h) / r;
+            let out = ngap(&circle(&f, (0.0, 0.0, z * k), rho * k), o, &s, w);
+            holds_within(out, h, w);
+        }
+    }
+}
+
+#[test]
+fn a_nurbs_cylinders_pcurve_gap_is_the_analytic_cylinders() {
+    let f = tilted();
+    let a = cylinder(f, 2.0);
+    let Surface::Cylinder(k) = &a else {
+        unreachable!()
+    };
+    let period = k.arcs().length();
+    let s = nurbs_of(&a, (0.0, -1.0, period, 2.0));
+    let o = over(0.0, TAU);
+    let c = circle(&f, (0.0, 0.0, 0.5), 2.0);
+    let p = pcurve_of(&c, &a, o, res()).unwrap();
+    for (edge, truth) in [
+        (c.clone(), 0.0),
+        (circle(&f, (0.0, 0.0, 0.5), 2.001), 0.001),
+        (circle(&f, (0.0, 0.0, 0.5 + 1e-4), 2.0), 1e-4),
+    ] {
+        let (x, y) = (pgap(&a, &p, &edge, o), pgap(&s, &p, &edge, o));
+        holds(x, truth);
+        holds(y, truth);
+        assert!((x.lower() - y.lower()).abs() <= W && (x.upper() - y.upper()).abs() <= W);
+    }
+    // A ruling, on the boundary of the patch's `u` (a pcurve enclosed a few ulps outside).
+    let g = line(at(&f, 2.0, 0.0, -1.0), *f.z());
+    let o = over(0.0, 3.0);
+    let p = pcurve_of(&g, &a, o, res()).unwrap();
+    holds(pgap(&s, &p, &g, o), 0.0);
+    let off = line(at(&f, 2.0 + 1e-5, 0.0, -1.0), *f.z());
+    holds(pgap(&s, &p, &off, o), 1e-5);
+}
+
+#[test]
+fn a_nurbs_gap_is_the_same_each_call() {
+    let f = tilted();
+    let s = nurbs_of(&sphere(f, 2.0), (0.0, 0.0, 1.0, 1.0));
+    let c = circle(&f, (0.0, 0.0, 1.1), 1.8);
+    let o = over(0.0, PI);
+    let run = || {
+        let mut budget = Budget::new(50_000_000);
+        let b = curve_surface_gap(&c, &o, &s, Aim::Width(1e-6), &mut budget, &Stop::new());
+        (b, budget.used())
+    };
+    assert_eq!(run(), run());
+}
+
+/// A procedural surface is refused by name in both gaps, before any work.
+#[test]
+fn a_procedural_surface_is_refused_by_name() {
+    use crate::{Procedural, Revolution};
+    let g =
+        Curve::Line(Line::through(Point3::new(1.0, 0.0, 0.0), Point3::new(2.0, 0.5, 1.0)).unwrap());
+    let r = Revolution::new(
+        &g,
+        Extent1d::new(0.0, 1.0).unwrap(),
+        Point3::new(0.0, 0.0, 0.0),
+        Vec3::new(0.0, 0.0, 1.0),
+    )
+    .unwrap();
+    let s = Surface::Procedural(Arc::new(Procedural::new(r).unwrap()));
+    let o = over(0.0, 1.0);
+    let mut budget = Budget::new(1_000);
+    let e = curve_surface_gap(&g, &o, &s, Aim::Width(1e-6), &mut budget, &Stop::new());
+    assert_eq!(e, Err(GapError::Procedural));
+    // The generator itself, `u = 0` and `v` its own parameter.
+    let p = Curve2::Line(
+        scx_curve::Line2::new(
+            Point2::new(0.0, 0.0),
+            scx_num::vector2d::Vec2::new(0.0, 1.0),
+        )
+        .unwrap(),
+    );
+    let e = pcurve_edge_gap(&s, &p, &g, &o, Aim::Width(1e-6), &mut budget, &Stop::new());
+    assert_eq!(e, Err(GapError::Procedural));
+    assert_eq!(budget.used(), 0);
 }
 
 #[test]

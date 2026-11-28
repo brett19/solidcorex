@@ -10,7 +10,7 @@ use crate::cells::Rule;
 use crate::classify::classify;
 use crate::contact::{Span, Touched, interferences};
 use crate::error::{BooleanError, BooleanRefusal};
-use crate::faceface::face_face;
+use crate::faceface::{FaceFace, face_face};
 use crate::geom::{Operands, Side};
 use crate::given::{Given, Incidences};
 use crate::imprint::imprint;
@@ -53,8 +53,9 @@ pub enum NoItems {}
 /// - [`BooleanUnsupported::Pcurve`] where a face's new loops need a pcurve with no exact
 ///   form (a fitted one).
 /// - [`BooleanUnsupported::NonManifold`] where two kept faces leave an edge in one
-///   direction (tangent along it), where a touch inside a face falls on a piece's
-///   boundary, or where an operand is non-manifold at a place a query reads.
+///   direction with tied bends, where a tangent line or circle ends inside a kept face,
+///   where a touch inside a face falls on a piece's boundary, or where an operand is
+///   non-manifold at a place a query reads.
 /// - [`BooleanUnsupported::Nesting`] where the result's connected sets of faces nest in a
 ///   way other than cavities of one set.
 /// - [`BooleanError::Exhausted`] when `cx`'s budget runs out, [`BooleanError::Cancelled`]
@@ -94,6 +95,18 @@ pub(crate) fn run(
     facts: &Incidences,
     cx: &mut Cx<'_>,
 ) -> Result<Done<NoItems>, BooleanError> {
+    staged(a, b, rule, facts, cx).map(|(done, _)| done)
+}
+
+/// [`run`] with what stages 1 to 4 found, for a caller that reads the meet as well as the
+/// built body ([`section`](crate::section)).
+pub(crate) fn staged(
+    a: &Brep,
+    b: &Brep,
+    rule: &Rule<'_>,
+    facts: &Incidences,
+    cx: &mut Cx<'_>,
+) -> Result<(Done<NoItems>, (Interference, FaceFace)), BooleanError> {
     let res = cx.doc.resolution();
     for (side, body) in Side::BOTH.into_iter().zip([a, b]) {
         if body.resolution() != res {
@@ -114,14 +127,17 @@ pub(crate) fn run(
     let (body, changes) = build(
         ops,
         imprinted,
-        &ff.touches,
+        &ff,
         &classes,
         rule,
         *cx.doc,
         &mut budget,
         cx.stop,
     )?;
-    Ok(Done::new(body, changes, Report::empty(budget.used())))
+    Ok((
+        Done::new(body, changes, Report::empty(budget.used())),
+        (found, ff),
+    ))
 }
 
 /// Where the operands meet: stages 1 to 3, with what they read of the faces.
@@ -146,6 +162,21 @@ pub(crate) fn interfere(
     interfere_given(ops, &Given::NONE, budget, stop)
 }
 
+/// Stages 1 to 3 over `ops`, no facts given, over only the pairs of `a`'s face `only` when
+/// one is named (a section scoped to one face).
+pub(crate) fn interfere_only(
+    ops: Operands<'_>,
+    only: Option<FaceId>,
+    budget: &mut Budget,
+    stop: &Stop,
+) -> Result<Interference, BooleanError> {
+    let mut pairs = face_pairs(ops, stop)?;
+    if let Some(face) = only {
+        pairs.retain(|&(fa, _)| fa == face);
+    }
+    interfere_pairs(ops, pairs, &Given::NONE, budget, stop)
+}
+
 /// Stages 1 to 3 over `ops`, the edge-face tests `given` covers read through it.
 pub(crate) fn interfere_given(
     ops: Operands<'_>,
@@ -154,6 +185,17 @@ pub(crate) fn interfere_given(
     stop: &Stop,
 ) -> Result<Interference, BooleanError> {
     let pairs = face_pairs(ops, stop)?;
+    interfere_pairs(ops, pairs, given, budget, stop)
+}
+
+/// Stages 2 and 3 over `pairs` of `ops`.
+fn interfere_pairs(
+    ops: Operands<'_>,
+    pairs: Vec<(FaceId, FaceId)>,
+    given: &Given,
+    budget: &mut Budget,
+    stop: &Stop,
+) -> Result<Interference, BooleanError> {
     let found = interferences(ops, &pairs, given, budget, stop)?;
     let points = merge(ops, &found.touched, &found.contacts)?;
     let mut spans = found.spans;

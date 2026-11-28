@@ -120,15 +120,30 @@ pub fn continuity(
     budget: &mut Budget,
     stop: &Stop,
 ) -> Result<Continuity, BodyqError> {
+    let claims = claims_of(tol)?;
+    let e = Edge::of(body, edge)?;
+    along(&e, &claims, budget, stop)
+}
+
+/// The five claims, G0 to G4, at `tol`.
+pub(crate) fn claims_of(tol: &ContinuityTolerances) -> Result<[Claim; 5], BodyqError> {
     let gap = tolerance(tol.gap.mm())?;
-    let claims = [
+    Ok([
         Claim::Gap(Ivl::from(gap) * Ivl::from(gap)),
         angle_claim(tol.angle)?,
         Claim::Bend(0, tolerance(tol.curvature)?),
         Claim::Bend(1, tolerance(tol.curvature_rate)?),
         Claim::Bend(2, tolerance(tol.curvature_accel)?),
-    ];
-    let e = Edge::of(body, edge)?;
+    ])
+}
+
+/// [`continuity`] of an edge already read (a sheet seam's too): the proof and the drops.
+pub(crate) fn along(
+    e: &Edge<'_>,
+    claims: &[Claim; 5],
+    budget: &mut Budget,
+    stop: &Stop,
+) -> Result<Continuity, BodyqError> {
     let Faces::Two(f) = &e.faces else {
         let none = Measured {
             at: e.lo,
@@ -142,8 +157,8 @@ pub fn continuity(
     };
     let mut proved = None;
     let mut limit = None;
-    for (order, claim) in Order::ALL.into_iter().zip(claims) {
-        match claim.along(&e, f, budget, stop)? {
+    for (order, claim) in Order::ALL.into_iter().zip(claims.iter().copied()) {
+        match claim.along(e, f, budget, stop)? {
             Proof::Holds(_) => proved = Some(order),
             Proof::Fails(at, drop) => {
                 limit = Some(Limit::Refuted { order, at, drop });
@@ -159,7 +174,7 @@ pub fn continuity(
         at: e.lo,
         bracket: Ivl::from(0.0),
     }; 5];
-    for (slot, claim) in measured.iter_mut().zip(claims) {
+    for (slot, claim) in measured.iter_mut().zip(claims.iter().copied()) {
         let mut worst: Option<Measured> = None;
         for i in 0..STATIONS {
             stop.check()?;
@@ -171,7 +186,7 @@ pub fn continuity(
             } else {
                 e.lo + (e.hi - e.lo) * w
             };
-            let bracket = claim.drop_at(&e, f, at);
+            let bracket = claim.drop_at(e, f, at);
             if worst.is_none_or(|d| bracket.hi > d.bracket.hi) {
                 worst = Some(Measured { at, bracket });
             }

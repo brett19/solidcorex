@@ -29,8 +29,8 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use scx_brep::{
-    Brep, Changes, Document, EdgeId, EdgeShape, FaceId, FaceSide, LoopRecord, RegionId, ShellId,
-    ShellRecord, UseGeom, VertexId,
+    Brep, Changes, Document, EdgeId, EdgeShape, Entity, FaceId, FaceSide, LoopRecord,
+    PcurveWriteError, RegionId, ShellId, ShellRecord, UseGeom, VertexId,
 };
 use scx_curve::Curve;
 use scx_mass::Sign;
@@ -45,8 +45,8 @@ use scx_surface::Closed;
 
 use crate::cells::{self, Rule, pick};
 use crate::classify::{Classes, Joins, material_back};
-use crate::error::{BooleanDefect, BooleanError};
-use crate::faceface::Touch;
+use crate::error::{BooleanDefect, BooleanError, BooleanUnsupported};
+use crate::faceface::FaceFace;
 use crate::geom::{Operands, Side, recorded};
 use crate::imprint::{Imprint, loops_error, ring, shoelace};
 use crate::pinch;
@@ -84,7 +84,7 @@ impl Kept {
 pub(crate) fn build(
     ops: Operands<'_>,
     mut m: Imprint,
-    touches: &[Touch],
+    ff: &FaceFace,
     cls: &Classes,
     rule: &Rule<'_>,
     doc: Document,
@@ -112,22 +112,65 @@ pub(crate) fn build(
             }
         }
     }
+    let keeps = |faces: [FaceId; 2]| {
+        [Side::A, Side::B]
+            .into_iter()
+            .zip(faces)
+            .all(|(side, of)| kept.values().any(|k| (k.side, k.of) == (side, of)))
+    };
+    // A tangent line or circle that ends inside a face (BO22): a section, or an edge of
+    // one side lying inside the other's face. That face's trace drops it as a cut that
+    // dangles, so where both sides of it are kept the result would lose the contact.
+    let cut_by = |e: EdgeId, side: Side, of: FaceId| {
+        m.pieces.get(&(side, of)).into_iter().flatten().any(|&p| {
+            m.draft
+                .face(p)
+                .is_some_and(|f| f.uses().any(|u| u.record().edge == e))
+        })
+    };
+    let lost = |at: FaceId| {
+        Err(BooleanError::Unsupported(BooleanUnsupported::NonManifold {
+            at: Entity::Face(at),
+        }))
+    };
+    for (s, &e) in ff.sections.iter().zip(&m.sections) {
+        if s.contact != analytic::Contact::Tangent || !keeps(s.faces) {
+            continue;
+        }
+        for (side, of) in [Side::A, Side::B].into_iter().zip(s.faces) {
+            if !cut_by(e, side, of) {
+                return lost(of);
+            }
+        }
+    }
+    for (l, &e) in ff.lying.iter().zip(&m.lying) {
+        let Some(e) = e else { continue };
+        let other = l.side.other();
+        let edge_kept = ops.of(l.side).edge(l.edge).is_some_and(|x| {
+            x.fins()
+                .any(|f| kept.values().any(|k| (k.side, k.of) == (l.side, f.face)))
+        });
+        let face_kept = kept.values().any(|k| (k.side, k.of) == (other, l.face));
+        if edge_kept && face_kept && !cut_by(e, other, l.face) {
+            return lost(l.face);
+        }
+    }
     stop.check()?;
     // A wall or a lamina: the result is not one manifold solid, and its shells are found
     // over cells.
     let cellular = kept.values().any(|k| k.both.is_some());
-    merge(ops, &mut m, &mut kept, doc, budget, stop)?;
-    edges(&mut m, cellular)?;
+    let absorbed = merge(ops, &mut m, &mut kept, doc, budget, stop)?;
+    edges(&mut m, cellular, ops.a.resolution().zone().mm())?;
     // A touch inside a face (stage 4 records no other) where both faces keep a piece: the
     // result meets itself at that point, a lone vertex in the face. Written before edges
     // are joined, so a vertex an edge was cut at for the touch stays.
-    if !touches.is_empty() {
+    if !ff.touches.is_empty() {
         let live: Vec<(FaceId, Side, FaceId)> = kept
             .iter()
             .filter(|(f, _)| m.draft.face(**f).is_some())
             .map(|(&f, k)| (f, k.side, k.of))
             .collect();
-        cells::touches(&mut m, touches, &live, budget, stop)?;
+        cells::touches(&mut m, &ff.touches, &live, budget, stop)?;
     }
     join_edges(ops, &mut m, doc)?;
     vertices(&mut m);
@@ -140,16 +183,25 @@ pub(crate) fn build(
             .collect();
         cells::shells(&mut m, &solid, doc, budget, stop)?;
     } else {
-        shells(ops, &mut m, &kept, doc, budget, stop)?;
+        shells(ops, &mut m, &kept, &absorbed, doc, budget, stop)?;
     }
-    m.draft.finish(&doc).map_err(|_| defect())
+    let (body, changes) = m.draft.finish(&doc).map_err(|_| defect())?;
+    // A result that cannot be enclosed (a face or an edge with no box) is one its own
+    // queries (classification, mass, the contract) cannot answer for: not a result.
+    if body.bounding_box().is_none() && body.faces().next().is_some() {
+        return Err(defect());
+    }
+    Ok((body, changes))
 }
 
 const fn defect() -> BooleanError {
     BooleanError::Defect(BooleanDefect::Build)
 }
 
-/// Merges the kept faces that are one face.
+/// Each face a merge absorbed, to its survivor and the operand face it was a piece of.
+type Absorbed = BTreeMap<FaceId, (FaceId, Side, FaceId)>;
+
+/// Merges the kept faces that are one face, returning the faces absorbed.
 fn merge(
     ops: Operands<'_>,
     m: &mut Imprint,
@@ -157,7 +209,7 @@ fn merge(
     doc: Document,
     budget: &mut Budget,
     stop: &Stop,
-) -> Result<(), BooleanError> {
+) -> Result<Absorbed, BooleanError> {
     let mut set = Joins::new(kept.keys().copied());
     let mut same_surface: BTreeMap<(Side, FaceId, Side, FaceId), bool> = BTreeMap::new();
     let edges: Vec<EdgeId> = m.draft.edges().map(scx_brep::Edge::id).collect();
@@ -241,6 +293,7 @@ fn merge(
     for &f in kept.keys() {
         groups.entry(set.root(f)).or_default().push(f);
     }
+    let mut absorbed = Absorbed::new();
     for faces in groups.into_values().filter(|g| g.len() > 1) {
         stop.check()?;
         let survivor = faces
@@ -253,14 +306,15 @@ fn merge(
         for &f in &faces {
             if f != survivor {
                 m.draft.merge_face(f, survivor).ok_or_else(defect)?;
-                kept.remove(&f);
+                let k = kept.remove(&f).ok_or_else(defect)?;
+                absorbed.insert(f, (survivor, k.side, k.of));
             }
         }
         m.draft
             .edit_face(survivor, |r| r.loops = loops)
             .ok_or_else(defect)?;
     }
-    Ok(())
+    Ok(absorbed)
 }
 
 /// Whether the surfaces of two kept faces' operand faces coincide over their uv boxes.
@@ -300,6 +354,11 @@ fn use_mid(g: &UseGeom) -> Option<Point2> {
 type At = (FaceId, usize, usize);
 
 /// The loops of the face the group `faces` makes, walked across the edges inside it.
+///
+/// Pieces of one operand face meeting a period apart meet across its seam, and the seam
+/// goes with the other edges inside, unless that leaves a loop winding round the surface
+/// (BO22: a ruling cut through a periodic face rim to rim, the pieces joined again): then
+/// the seam stays and the pieces' own pcurves are kept.
 fn splice(
     m: &Imprint,
     faces: &[FaceId],
@@ -307,6 +366,27 @@ fn splice(
     kept: &BTreeMap<FaceId, Kept>,
     doc: Document,
 ) -> Result<Vec<LoopRecord>, BooleanError> {
+    let side = kept.get(&survivor).map_or(Side::A, |k| k.side);
+    let refused = |e: PcurveWriteError| loops_error(e.kind(), side.operand(), survivor);
+    match spliced(m, faces, survivor, kept, doc, false)? {
+        Err(PcurveWriteError::Winds { .. }) => {
+            spliced(m, faces, survivor, kept, doc, true)?.map_err(refused)
+        }
+        r => r.map_err(refused),
+    }
+}
+
+/// [`splice`], keeping the seam where `seams`; the exact writer's refusal is returned for
+/// [`splice`] to read.
+#[expect(clippy::too_many_lines, reason = "one walk over the group's loops")]
+fn spliced(
+    m: &Imprint,
+    faces: &[FaceId],
+    survivor: FaceId,
+    kept: &BTreeMap<FaceId, Kept>,
+    doc: Document,
+    seams: bool,
+) -> Result<Result<Vec<LoopRecord>, PcurveWriteError>, BooleanError> {
     let members: BTreeSet<FaceId> = faces.iter().copied().collect();
     let one_face = {
         let mut owners = faces
@@ -336,6 +416,8 @@ fn splice(
     // A twin a period apart: the pieces meet across the face's seam, so the
     // records cannot be kept and the loops are made again from the edges.
     let mut shifted = false;
+    // The uses of collapsed edges among the twins.
+    let mut poles: BTreeSet<At> = BTreeSet::new();
     for (&e, at) in &by_edge {
         let (Some(&p), Some(&q), 2) = (at.first(), at.get(1), at.len()) else {
             continue;
@@ -350,7 +432,17 @@ fn splice(
         if !fins_inside {
             continue;
         }
-        if one_face {
+        // A collapsed edge (a sphere's pole) inside: the two pieces' uses are parts of
+        // the pole's line in uv, which the merged face keeps as one use, so its loops are
+        // made again with the edge once where the walk crosses it.
+        if m.draft
+            .edge(e)
+            .is_some_and(|v| matches!(v.shape(), Some(EdgeShape::Collapsed)))
+        {
+            poles.insert(p);
+            poles.insert(q);
+            shifted = true;
+        } else if one_face {
             let (Some(rp), Some(rq)) = (record(p), record(q)) else {
                 return Err(defect());
             };
@@ -358,6 +450,9 @@ fn splice(
                 continue;
             };
             if mp.distance(mq) > SAME_UV {
+                if seams {
+                    continue;
+                }
                 shifted = true;
             }
         }
@@ -396,6 +491,9 @@ fn splice(
                 let mut nx = next(cur);
                 let mut steps = 0;
                 while let Some(&t) = twin.get(&nx) {
+                    if poles.contains(&nx) {
+                        cycle.push(nx);
+                    }
                     nx = next(t);
                     steps += 1;
                     if steps > total {
@@ -422,7 +520,7 @@ fn splice(
             .collect::<Result<Vec<_>, _>>()?;
         let area = |lp: &LoopRecord| shoelace(&ring(lp));
         loops.sort_by(|p, q| area(q).total_cmp(&area(p)));
-        return Ok(loops);
+        return Ok(Ok(loops));
     }
     let seqs: Vec<Vec<(EdgeId, Sense)>> = cycles
         .into_iter()
@@ -441,16 +539,13 @@ fn splice(
         })
         .collect::<Result<_, _>>()?;
     let view = m.draft.face(survivor).ok_or_else(defect)?;
-    let side = kept.get(&survivor).map_or(Side::A, |k| k.side);
-    m.draft
-        .exact_loops(view.surface(), &seqs, &doc)
-        .map_err(|e| loops_error(e.kind(), side.operand(), survivor))
+    Ok(m.draft.exact_loops(view.surface(), &seqs, &doc))
 }
 
 /// Removes the edges no face bounds and refuses an edge one face bounds, unless `free`
 /// (a lamina's or a sheet's edge); puts the fins of an edge more than two bound in radial
-/// order ([`pinch::order_fins`]).
-fn edges(m: &mut Imprint, free: bool) -> Result<(), BooleanError> {
+/// order ([`pinch::order_fins`]), `zone` the body's resolution.
+fn edges(m: &mut Imprint, free: bool, zone: f64) -> Result<(), BooleanError> {
     let mut gone = Vec::new();
     let mut pinched = Vec::new();
     for e in m.draft.edges() {
@@ -469,7 +564,7 @@ fn edges(m: &mut Imprint, free: bool) -> Result<(), BooleanError> {
         m.draft.remove_edge(e);
     }
     for e in pinched {
-        pinch::order_fins(&mut m.draft, e, free)?;
+        pinch::order_fins(&mut m.draft, e, free, zone)?;
     }
     Ok(())
 }
@@ -675,6 +770,7 @@ fn shells(
     ops: Operands<'_>,
     m: &mut Imprint,
     kept: &BTreeMap<FaceId, Kept>,
+    absorbed: &Absorbed,
     doc: Document,
     budget: &mut Budget,
     stop: &Stop,
@@ -765,7 +861,7 @@ fn shells(
         let whole: Vec<Option<Sign>> = pairs
             .iter()
             .zip(comps.values())
-            .map(|(_, faces)| whole_shell(ops, m, kept, faces))
+            .map(|(_, faces)| whole_shell(ops, m, kept, absorbed, faces))
             .collect();
         let mut known: BTreeMap<ShellId, Sign> = BTreeMap::new();
         // A shell is made of the sets of the pairs it holds (one when no link joined it).
@@ -799,8 +895,9 @@ fn shells(
 }
 
 /// The sign of the volume a set of kept faces bounds from its material side, where the set
-/// is one operand shell whole: each face with all the pieces of its operand face, all of one
-/// operand, all the shell's faces, each once (no sheet), its material on one side of that
+/// is one operand shell whole: each face with all the pieces of its operand face (a piece
+/// merged away is in its survivor, which took nothing of another face), all of one operand,
+/// all the shell's faces, each once (no sheet), its material on one side of that
 /// shell. Its surface is the operand shell's, so its sign is the operand's: a shell of
 /// the outside is negative, the one shell of a region positive (a valid operand's, as
 /// classification already trusts). `None` where that does not settle it (a region with a
@@ -809,6 +906,7 @@ fn whole_shell(
     ops: Operands<'_>,
     m: &Imprint,
     kept: &BTreeMap<FaceId, Kept>,
+    absorbed: &Absorbed,
     faces: &[FaceId],
 ) -> Option<Sign> {
     let first = kept.get(faces.first()?)?;
@@ -824,22 +922,31 @@ fn whole_shell(
     };
     let shell = body.face(first.of)?.shell(at(first));
     let set: BTreeSet<FaceId> = faces.iter().copied().collect();
+    // A piece merged away is covered by its survivor.
+    let live = |p: FaceId| absorbed.get(&p).map_or(p, |&(s, _, _)| s);
     let mut ofs = BTreeSet::new();
-    let mut pieces = 0;
+    let mut covered = BTreeSet::new();
     for f in faces {
         let k = kept.get(f)?;
         // Every piece of its operand face is in the set (a face cut by a contact edge still
         // covers its surface).
         let all = m.pieces.get(&(k.side, k.of))?;
         if k.side != first.side
-            || !all.iter().all(|p| set.contains(p))
+            || !all.iter().all(|&p| set.contains(&live(p)))
             || body.face(k.of)?.shell(at(k)).id() != shell.id()
         {
             return None;
         }
         if ofs.insert(k.of) {
-            pieces += all.len();
+            covered.extend(all.iter().map(|&p| live(p)));
         }
+    }
+    // Nothing of another operand face was merged into the set.
+    if absorbed
+        .values()
+        .any(|&(s, side, of)| set.contains(&s) && (side != first.side || !ofs.contains(&of)))
+    {
+        return None;
     }
     let mut sides = 0;
     for (f, _) in shell.faces() {
@@ -848,7 +955,7 @@ fn whole_shell(
             return None;
         }
     }
-    if sides != ofs.len() || pieces != faces.len() {
+    if sides != ofs.len() || covered.len() != faces.len() {
         return None;
     }
     let region = shell.region();

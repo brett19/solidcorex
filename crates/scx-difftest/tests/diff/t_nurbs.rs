@@ -284,12 +284,27 @@ diff!(
     |a: At| x::split(&a),
     s::split(&a)
 );
-diff!(
-    nurbs_elevate,
-    pin_defect = pin_defects::nurbs_elevate,
-    |a: At, times: usize| x::elevate(&a, times % 4),
-    s::elevate(&a, times % 4)
-);
+/// `nurbs_elevate` takes 110 s on one core, so it is eight tests, each on every eighth input
+/// of the one pool (seeded as the whole test was), judging together what it did.
+macro_rules! nurbs_elevate_shard {
+    ($name:ident, $i:expr) => {
+        diff!(
+            $name,
+            pin_defect = pin_defects::nurbs_elevate,
+            shard = ($i, 8, "nurbs_elevate"),
+            |a: At, times: usize| x::elevate(&a, times % 4),
+            s::elevate(&a, times % 4)
+        );
+    };
+}
+nurbs_elevate_shard!(nurbs_elevate_0, 0);
+nurbs_elevate_shard!(nurbs_elevate_1, 1);
+nurbs_elevate_shard!(nurbs_elevate_2, 2);
+nurbs_elevate_shard!(nurbs_elevate_3, 3);
+nurbs_elevate_shard!(nurbs_elevate_4, 4);
+nurbs_elevate_shard!(nurbs_elevate_5, 5);
+nurbs_elevate_shard!(nurbs_elevate_6, 6);
+nurbs_elevate_shard!(nurbs_elevate_7, 7);
 diff!(
     nurbs_bezier_split,
     pin_defect = pin_defects::nurbs_bezier_split,

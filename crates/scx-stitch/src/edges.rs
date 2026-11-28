@@ -41,6 +41,10 @@ use crate::stitch::{Build, measured};
 /// Work charged per box candidate.
 const UNIT: u64 = 1;
 
+/// The largest group of pieces with the same ends whose pairs are all tested; a larger one
+/// is searched through a box tree.
+const SMALL: usize = 8;
+
 /// A sheet edge with a curve.
 struct SheetEdge<'a> {
     sheet: usize,
@@ -225,7 +229,7 @@ impl Build<'_> {
                 .ok_or(StitchError::Defect(StitchDefect::Draft))?;
             self.edge_name.insert(p.at, (e.operand(), e.id));
         }
-        let (joined, more) = self.join(&edges, &pieces, doc, budget, stop, warnings)?;
+        let (joined, more) = self.join(&edges, &pieces, doc, budget, stop, warnings, raised)?;
         left.extend(more);
         left.sort_by(|a, b| {
             a.edge().cmp(&b.edge()).then_with(|| match (a, b) {
@@ -593,6 +597,46 @@ impl Build<'_> {
         Ok(())
     }
 
+    /// Raises the draft edge `e` to `far`, `Measured`, where that is beyond its reach: the
+    /// certified gap a projected pcurve of its curve leaves, which bounds the curve's
+    /// distance from that face.
+    fn raise_edge(
+        &mut self,
+        e: EdgeId,
+        far: f64,
+        zone: f64,
+        warnings: &mut Vec<Warning>,
+        raised: &mut Vec<Raise>,
+    ) -> Result<(), StitchError> {
+        let rec = self
+            .draft
+            .edge_mut(e)
+            .ok_or(StitchError::Defect(StitchDefect::Draft))?;
+        let before = rec.accuracy.as_ref().map(|r| r.acc);
+        let reach = before.map_or(zone, |a| a.length().mm().max(zone));
+        if far <= reach {
+            return Ok(());
+        }
+        let after = measured(far).ok_or(StitchError::Defect(StitchDefect::Draft))?;
+        let acc = after.acc;
+        rec.accuracy = Some(after);
+        let entity = Entity::Edge(e);
+        if let Some(r) = raised.iter_mut().find(|r| r.entity == entity) {
+            r.after = acc;
+        } else {
+            raised.push(Raise {
+                entity,
+                before: before.unwrap_or(Accuracy::ZERO),
+                after: acc,
+            });
+            warnings.push(Warning {
+                entity,
+                kind: WarningKind::AccuracyRaised,
+            });
+        }
+        Ok(())
+    }
+
     /// Joins pieces of two sheets with the same ends: candidates from the ends and box
     /// overlap, each proved by both directed [`curve_curve_gap`]s on the lead piece's
     /// budget share, accepted from a heap in (bound, ids) order where neither piece has
@@ -605,6 +649,7 @@ impl Build<'_> {
         budget: &mut Budget,
         stop: &Stop,
         warnings: &mut Vec<Warning>,
+        raised: &mut Vec<Raise>,
     ) -> Result<(Vec<Joined>, Vec<Left>), StitchError> {
         let edge = |p: &Piece| {
             edges
@@ -618,22 +663,15 @@ impl Build<'_> {
         }
         // Candidate pairs, by lead piece.
         let mut lead: BTreeMap<usize, Vec<usize>> = BTreeMap::new();
+        let mut space = Overlaps::new();
         for ks in by_ends.values() {
-            for (x, &i) in ks.iter().enumerate() {
-                for &j in ks.get(x + 1..).unwrap_or_default() {
-                    budget.charge(UNIT)?;
-                    let (Some(pi), Some(pj)) = (pieces.get(i), pieces.get(j)) else {
-                        continue;
-                    };
-                    let (ei, ej) = (edge(pi)?, edge(pj)?);
-                    if ei.sheet == ej.sheet || ei.bx.are_disjoint(&ej.bx, ei.reach.max(ej.reach)) {
-                        continue;
-                    }
-                    lead.entry(i).or_default().push(j);
-                }
+            stop.check()?;
+            for (i, js) in candidates(ks, pieces, edges, budget, &mut space)? {
+                lead.entry(i).or_default().extend(js);
             }
         }
-        let each = share(budget, lead.len());
+        // One more than the leads: a lone lead keeps a part of the budget for the joins after it.
+        let each = share(budget, lead.len() + 1);
         let mut tests: Vec<(usize, usize, Test, f64)> = Vec::new();
         for (&i, js) in &lead {
             stop.check()?;
@@ -704,7 +742,7 @@ impl Build<'_> {
         for &(i, j, t, allowance) in &tests {
             match t {
                 Test::Within(gap) if alone(i) && alone(j) => {
-                    heap.push(Reverse((order_key(gap), i, j)));
+                    heap.push(Reverse((order_key(gap), i, j, order_key(allowance))));
                 }
                 Test::Beyond | Test::Within(_) => {}
                 Test::Open(lower, upper) => {
@@ -734,7 +772,7 @@ impl Build<'_> {
         }
         let mut joined = Vec::new();
         let mut shells = Shells::default();
-        while let Some(Reverse((key, i, j))) = heap.pop() {
+        while let Some(Reverse((key, i, j, allowance))) = heap.pop() {
             stop.check()?;
             let (Some(pi), Some(pj)) = (pieces.get(i), pieces.get(j)) else {
                 return Err(StitchError::Defect(StitchDefect::Draft));
@@ -745,7 +783,8 @@ impl Build<'_> {
             } else {
                 ((ei, pi), (ej, pj))
             };
-            let (s, sides) = self.glue(keep, gone, doc)?;
+            let near = f64::from_bits(allowance) + gone.0.reach;
+            let (s, sides) = self.glue(keep, gone, near, doc, budget, stop, warnings, raised)?;
             shells.join(sides);
             warnings.push(Warning {
                 entity: Entity::Edge(s),
@@ -803,12 +842,22 @@ impl Build<'_> {
     }
 
     /// Joins the piece `gone` onto `keep`: the faces of `gone` take `keep` in its sense,
-    /// with pcurves written from its curve, and `gone` is merged into it.
+    /// with pcurves written from its curve, and `gone` is merged into it. `near` is how far
+    /// the join proved `keep`'s curve from the faces of `gone`: the coincidence it was
+    /// joined within, plus `gone`'s own reach from its faces. Where `keep`'s curve has no
+    /// exact pcurve on such a face, the use gets its projection's, with the certified gap
+    /// recorded as its bound (74 §40); a gap past the kept edge's reach raises that too.
+    #[allow(clippy::too_many_arguments)]
     fn glue(
         &mut self,
         (ek, pk): (&SheetEdge<'_>, &Piece),
         (eg, pg): (&SheetEdge<'_>, &Piece),
+        near: f64,
         doc: Document,
+        budget: &mut Budget,
+        stop: &Stop,
+        warnings: &mut Vec<Warning>,
+        raised: &mut Vec<Raise>,
     ) -> Result<(EdgeId, [ShellId; 2]), StitchError> {
         let (s, a) = (pk.at, pg.at);
         let fins = |d: &scx_brep::Draft, e: EdgeId| {
@@ -883,15 +932,32 @@ impl Build<'_> {
         self.draft
             .merge_edge(a, s)
             .ok_or(StitchError::Defect(StitchDefect::Draft))?;
+        let mut worst: Option<f64> = None;
         for f in faces {
-            self.draft
-                .write_pcurves(f, &doc)
+            let projected = self
+                .draft
+                .write_pcurves_projecting(f, &doc, Length::from_mm(near), budget, stop)
                 .map_err(|cause| match cause {
                     PcurveWriteError::NeedsFit { .. } | PcurveWriteError::OffSurface { .. } => {
                         ek.pending(EdgePending::Fit)
                     }
+                    PcurveWriteError::Gap {
+                        cause:
+                            GapError::Undecided {
+                                why: Short::Stopped,
+                                ..
+                            },
+                        ..
+                    } => StitchError::Cancelled,
                     cause => StitchError::Defect(StitchDefect::Pcurve { face: f, cause }),
                 })?;
+            for p in projected.iter().filter(|p| p.edge == s) {
+                let g = p.gap.upper();
+                worst = Some(worst.map_or(g, |w| w.max(g)));
+            }
+        }
+        if let Some(far) = worst {
+            self.raise_edge(s, far, doc.resolution().zone().mm(), warnings, raised)?;
         }
         Ok((s, [s0, s1]))
     }
@@ -922,6 +988,83 @@ impl Shells {
         self.up.entry(a).or_insert(lo);
         self.up.entry(b).or_insert(lo);
     }
+}
+
+/// Pieces sharing both ends, grouped by `ks` (ascending): each piece with the later pieces
+/// of another sheet that can be its partner, as `(lead, partners ascending)`, leads
+/// ascending.
+///
+/// A pair can be within the larger reach only if each piece's midpoint (a point of its
+/// curve) lies within that reach of the other's edge box, which holds the whole curve.
+/// Boxes alone do not separate pieces that share ends (every meridian of a sphere spans
+/// the pole to pole box), but a midpoint does: a group of more than [`SMALL`] pieces
+/// searches a box tree over the edge boxes for each midpoint, the rest test each pair. The
+/// pairs kept are the pairs of the box test over the edge boxes that also pass the
+/// midpoint test, in the same order whichever way they were found.
+fn candidates(
+    ks: &[usize],
+    pieces: &[Piece],
+    edges: &[SheetEdge<'_>],
+    budget: &mut Budget,
+    space: &mut Overlaps,
+) -> Result<Vec<(usize, Vec<usize>)>, StitchError> {
+    let draft = || StitchError::Defect(StitchDefect::Draft);
+    // Each piece's edge and the point at its midpoint.
+    let mut ms: Vec<(&SheetEdge<'_>, Extent3d)> = Vec::with_capacity(ks.len());
+    for &k in ks {
+        let p = pieces.get(k).ok_or_else(draft)?;
+        let e = edges.get(p.edge).ok_or_else(draft)?;
+        let m = Extent3d::from_point(e.curve.point(p.interval.mid())).ok_or_else(draft)?;
+        ms.push((e, m));
+    }
+    let reach = ms.iter().fold(0.0f64, |r, (e, _)| r.max(e.reach));
+    // Whether the pair (x, y) of the group, x before y, can be partners.
+    let possible = |x: usize, y: usize| -> bool {
+        let (Some((ex, mx)), Some((ey, my))) = (ms.get(x), ms.get(y)) else {
+            return false;
+        };
+        let t = ex.reach.max(ey.reach);
+        ex.sheet != ey.sheet
+            && !ex.bx.are_disjoint(&ey.bx, t)
+            && !ey.bx.are_disjoint(mx, t)
+            && !ex.bx.are_disjoint(my, t)
+    };
+    let mut out = Vec::new();
+    if ks.len() <= SMALL {
+        for (x, &i) in ks.iter().enumerate() {
+            let mut js = Vec::new();
+            for (y, &j) in ks.iter().enumerate().skip(x + 1) {
+                budget.charge(UNIT)?;
+                if possible(x, y) {
+                    js.push(j);
+                }
+            }
+            if !js.is_empty() {
+                out.push((i, js));
+            }
+        }
+        return Ok(out);
+    }
+    let boxes: Vec<Extent3d> = ms.iter().map(|(e, _)| e.bx).collect();
+    let tree = BoxTree::new(&boxes);
+    for (x, (_, m)) in ms.iter().enumerate() {
+        let mut js = Vec::new();
+        // The tree's answer is ascending in the group's order, which is the pieces'.
+        for &y in tree.overlapping_in(m, reach, space) {
+            if y > x {
+                budget.charge(UNIT)?;
+                if possible(x, y)
+                    && let Some(&j) = ks.get(y)
+                {
+                    js.push(j);
+                }
+            }
+        }
+        if let (false, Some(&i)) = (js.is_empty(), ks.get(x)) {
+            out.push((i, js));
+        }
+    }
+    Ok(out)
 }
 
 /// A gap's heap key: a bound not below zero orders as its bits.

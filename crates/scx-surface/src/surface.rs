@@ -18,8 +18,12 @@
 //! is not on the enum yet: a NURBS surface has none, and an enum method that refused one arm
 //! would change its signature when it arrives (63 §4.7).
 //!
-//! The enum is `#[non_exhaustive]` (01 C10): `Procedural` and the swept kinds join later,
-//! so a match outside this crate keeps a wildcard arm. It is not `Copy`: the `Nurbs` arm
+//! The `Procedural` arm holds a [`Procedural`] (a revolution or extrusion: its definition
+//! and its exact net, built once) behind an `Arc`. Its point, jet and normal read the
+//! definition; its inversion reads the net (research 75 §13.27).
+//!
+//! The enum is `#[non_exhaustive]` (01 C10): the swept kinds join later, so a match outside
+//! this crate keeps a wildcard arm. It is not `Copy`: the `Nurbs` arm
 //! holds an `Arc`.
 
 use std::sync::Arc;
@@ -40,7 +44,7 @@ use crate::error::SurfaceError;
 use crate::invert::Inversion;
 use crate::nurbs_invert;
 use crate::to_nurbs::restrict;
-use crate::{Cone, Cylinder, Plane, Sphere, Torus};
+use crate::{Cone, Cylinder, Plane, Procedural, Sphere, Torus};
 
 /// A surface in space: one of the kinds.
 #[derive(Debug, Clone, PartialEq)]
@@ -58,6 +62,9 @@ pub enum Surface {
     Torus(Torus),
     /// A NURBS surface, over its knots' domain and continuing its end pieces past it.
     Nurbs(Arc<NurbsSurface<3>>),
+    /// A procedural surface (a revolution or an extrusion): its definition and its exact
+    /// net, built once (research 75 §13.27).
+    Procedural(Arc<Procedural>),
 }
 
 // The largest arm (a cone or torus: a frame, two sizes and a sense) plus the tag (63 §4.3);
@@ -67,7 +74,7 @@ const _: () = assert!(size_of::<Surface>() <= 128);
 /// Every method once: each analytic arm calls the kind's method of the same name, the
 /// `Nurbs` arm the second expression.
 macro_rules! dispatch {
-    ($self:expr, $k:ident => $call:expr, $n:ident => $nurbs:expr) => {
+    ($self:expr, $k:ident => $call:expr, $n:ident => $nurbs:expr, $p:ident => $proc:expr) => {
         match $self {
             Self::Plane($k) => $call,
             Self::Cylinder($k) => $call,
@@ -75,6 +82,7 @@ macro_rules! dispatch {
             Self::Sphere($k) => $call,
             Self::Torus($k) => $call,
             Self::Nurbs($n) => $nurbs,
+            Self::Procedural($p) => $proc,
         }
     };
 }
@@ -128,6 +136,15 @@ fn nurbs_normal(n: &NurbsSurface<3>, uv: Point2, side: [Approach; 2]) -> Option<
     su.cross(sv).normalized()
 }
 
+/// A surface's normal curvature along a direction ([`Surface::normal_curvature`]).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct NormalBend {
+    /// The normal curvature along the direction, about the surface's normal.
+    pub along: f64,
+    /// The magnitude of the largest principal curvature there.
+    pub largest: f64,
+}
+
 impl Surface {
     /// The closed-form inverse of the kind's uv (63 D13), as a [`Chart`]: `None` for a
     /// NURBS surface, which has none.
@@ -143,7 +160,7 @@ impl Surface {
             Self::Cone(c) => (c.frame(), c.sense(), ChartKind::Cone),
             Self::Sphere(s) => (s.frame(), s.sense(), ChartKind::Sphere),
             Self::Torus(t) => (t.frame(), t.sense(), ChartKind::Torus { major: t.major() }),
-            Self::Nurbs(_) => return None,
+            Self::Nurbs(_) | Self::Procedural(_) => return None,
         };
         // Every surface's sizes passed the same checks the chart makes.
         Chart::new(*frame, sense, kind).ok()
@@ -160,7 +177,7 @@ impl Surface {
                 ParamDomain::Bounded(e.x_interval()),
                 ParamDomain::Bounded(e.y_interval()),
             )
-        })
+        }, p => p.domain())
     }
 
     /// The exact NURBS image over `over`, in the same uv (63 §4.8): the analytic kind's
@@ -173,14 +190,14 @@ impl Surface {
     /// surface, `EmptyExtent`, `OutsideDomain` past its knots' domain, and `Nurbs` with
     /// the split's error.
     pub fn to_nurbs(&self, over: &Extent2d) -> Result<NurbsSurface<3>, SurfaceError> {
-        dispatch!(self, k => k.to_nurbs(over), n => restrict(n, over))
+        dispatch!(self, k => k.to_nurbs(over), n => restrict(n, over), p => p.to_nurbs(over))
     }
 
     /// `S(u, v)` (on the pieces above `uv` for a NURBS surface, which is continuous).
     #[inline]
     #[must_use]
     pub fn point(&self, uv: Point2) -> Point3 {
-        dispatch!(self, k => k.point(uv), n => nurbs_point(n, uv))
+        dispatch!(self, k => k.point(uv), n => nurbs_point(n, uv), p => procedural_point(p, uv))
     }
 
     /// The partials `S^(i,j)` for every `i + j <= D` at `uv`, on the piece `side` picks in
@@ -189,7 +206,7 @@ impl Surface {
     #[inline]
     #[must_use]
     pub fn jet<const D: usize>(&self, uv: Point2, side: [Approach; 2]) -> SurfaceJet<Vec3, D> {
-        dispatch!(self, k => k.jet(uv, side), n => nurbs_jet(n, uv, side))
+        dispatch!(self, k => k.jet(uv, side), n => nurbs_jet(n, uv, side), p => procedural_jet(p, uv, side))
     }
 
     /// The unit normal along `S_u x S_v`, from the pieces `side` picks (a NURBS surface's
@@ -208,7 +225,46 @@ impl Surface {
             Self::Sphere(k) => Some(k.normal(uv)),
             Self::Torus(k) => Some(k.normal(uv)),
             Self::Nurbs(n) => nurbs_normal(n, uv, side),
+            Self::Procedural(p) => procedural_normal(p, uv, side),
         }
+    }
+
+    /// The normal curvature at `uv` along the tangent direction `d` (a vector in the
+    /// tangent plane, any length), about the normal [`Surface::normal`] gives: positive
+    /// where the surface bends toward that normal. With it, the largest principal
+    /// curvature's magnitude, which bounds how far the first moves as `uv` or `d` does.
+    /// From the first and second fundamental forms of the jet, so exact for the analytic
+    /// kinds up to rounding.
+    ///
+    /// `None` where there is no normal, the partials are degenerate, or `d` has no part in
+    /// the tangent plane.
+    #[must_use]
+    pub fn normal_curvature(&self, uv: Point2, side: [Approach; 2], d: Vec3) -> Option<NormalBend> {
+        let n = self.normal(uv, side)?.as_vec();
+        let jet = self.jet::<2>(uv, side);
+        let (su, sv) = (jet.get(1, 0)?, jet.get(0, 1)?);
+        let (suu, suv, svv) = (jet.get(2, 0)?, jet.get(1, 1)?, jet.get(0, 2)?);
+        let (e, f, g) = (su.dot(su), su.dot(sv), sv.dot(sv));
+        let (l, m, nn) = (suu.dot(n), suv.dot(n), svv.dot(n));
+        let det = e * g - f * f;
+        if !(det.is_finite() && det > 0.0) {
+            return None;
+        }
+        // The shape operator `I^-1 II`, whose eigenvalues are the principal curvatures;
+        // their half gap read off its entries, not as `sqrt(H^2 - K)`, which cancels to
+        // `sqrt(eps)` at an umbilic.
+        let (sa, sb) = ((g * l - f * m) / det, (g * m - f * nn) / det);
+        let (sc, sd) = ((e * m - f * l) / det, (e * nn - f * m) / det);
+        let half = 0.5 * (sa - sd);
+        let largest = (0.5 * (sa + sd)).abs() + (half * half + sb * sc).max(0.0).sqrt();
+        // `d` in uv: the least-squares solution of `J w = d`.
+        let (a, b) = (su.dot(d), sv.dot(d));
+        let (w1, w2) = ((g * a - f * b) / det, (e * b - f * a) / det);
+        let first = e * w1 * w1 + 2.0 * f * w1 * w2 + g * w2 * w2;
+        let second = l * w1 * w1 + 2.0 * m * w1 * w2 + nn * w2 * w2;
+        let along = second / first;
+        (first > 0.0 && along.is_finite() && largest.is_finite())
+            .then_some(NormalBend { along, largest })
     }
 
     /// The point at each of `uv`, into `out`: `out[i]` is [`Surface::point`]`(uv[i])`, bit
@@ -228,6 +284,7 @@ impl Surface {
             Self::Sphere(k) => k.eval_many(uv, out),
             Self::Torus(k) => k.eval_many(uv, out),
             Self::Nurbs(n) => nurbs_many(n, uv, out),
+            Self::Procedural(p) => procedural_many(p, uv, out),
         }
     }
 
@@ -247,7 +304,8 @@ impl Surface {
         dispatch!(
             self,
             k => grid_by_point(us, vs, out, |uv| k.point(uv)),
-            n => nurbs_grid(n, us, vs, out)
+            n => nurbs_grid(n, us, vs, out),
+            p => procedural_grid(p, us, vs, out)
         );
     }
 
@@ -278,7 +336,8 @@ impl Surface {
         dispatch!(
             self,
             k => Ok(k.invert(p, domain)),
-            n => nurbs_invert::invert(n, p, near, domain, budget, stop)
+            n => nurbs_invert::invert(n, p, near, domain, budget, stop),
+            q => q.invert(p, near, domain, budget, stop)
         )
     }
 }
@@ -331,6 +390,39 @@ fn nurbs_grid(n: &NurbsSurface<3>, us: &[f64], vs: &[f64], out: &mut [Point3]) {
     }
 }
 
+/// A procedural surface's point from its definition. The procedural helpers are never
+/// inlined, as the `Nurbs` helpers are not, so the analytic arms keep their frame.
+#[inline(never)]
+fn procedural_point(p: &Procedural, uv: Point2) -> Point3 {
+    p.point(uv)
+}
+
+#[inline(never)]
+fn procedural_jet<const D: usize>(
+    p: &Procedural,
+    uv: Point2,
+    side: [Approach; 2],
+) -> SurfaceJet<Vec3, D> {
+    p.jet(uv, side)
+}
+
+#[inline(never)]
+fn procedural_normal(p: &Procedural, uv: Point2, side: [Approach; 2]) -> Option<UnitVec3> {
+    p.normal(uv, side)
+}
+
+#[inline(never)]
+fn procedural_many(p: &Procedural, uv: &[Point2], out: &mut [Point3]) {
+    for (o, &q) in out.iter_mut().zip(uv) {
+        *o = p.point(q);
+    }
+}
+
+#[inline(never)]
+fn procedural_grid(p: &Procedural, us: &[f64], vs: &[f64], out: &mut [Point3]) {
+    grid_by_point(us, vs, out, |uv| p.point(uv));
+}
+
 /// `out[i * vs.len() + j] = f((us[i], vs[j]))`.
 #[inline]
 fn grid_by_point(us: &[f64], vs: &[f64], out: &mut [Point3], f: impl Fn(Point2) -> Point3) {
@@ -356,6 +448,18 @@ from_kind!(Plane, Cylinder, Cone, Sphere, Torus);
 impl From<Arc<NurbsSurface<3>>> for Surface {
     fn from(n: Arc<NurbsSurface<3>>) -> Self {
         Self::Nurbs(n)
+    }
+}
+
+impl From<Arc<Procedural>> for Surface {
+    fn from(p: Arc<Procedural>) -> Self {
+        Self::Procedural(p)
+    }
+}
+
+impl From<Procedural> for Surface {
+    fn from(p: Procedural) -> Self {
+        Self::Procedural(Arc::new(p))
     }
 }
 
@@ -564,6 +668,7 @@ pub(crate) mod tests {
                     }),
                 }
             }
+            Surface::Procedural(k) => of!(k, k.normal(uv, side)),
         }
     }
 

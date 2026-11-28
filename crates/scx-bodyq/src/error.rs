@@ -5,7 +5,7 @@
 
 use core::fmt;
 
-use scx_brep::{EdgeId, Entity, FaceId, ShellId, VertexId};
+use scx_brep::{EdgeId, Entity, EntityKind, FaceId, ShellId, VertexId};
 use scx_num::budget::{Exhausted, Stopped};
 use scx_num::error::ErrorKind;
 use scx_surface::SurfaceError;
@@ -93,9 +93,23 @@ pub enum BodyqRefusal {
         /// The face.
         face: FaceId,
     },
+    /// A kind of entity that cannot be picked by position: a region or a shell has no place
+    /// of its own (BW8).
+    NotPickable {
+        /// The kind asked for.
+        kind: EntityKind,
+    },
     /// A face that does not separate material from air: both its sides are solid, or
     /// neither is, so it has no outward side (BW11).
     NoMaterialSide {
+        /// The face.
+        face: FaceId,
+    },
+    /// Fewer than two teeth of a comb or stations of a seam (BW10): the ends are two.
+    Count,
+    /// A point of a face where its surface has no normal or no second form to read: a
+    /// pole, an apex or a collapsed edge of the parametrisation (BW10).
+    Singular {
         /// The face.
         face: FaceId,
     },
@@ -142,6 +156,11 @@ pub enum BodyqDefect {
         /// The face.
         face: FaceId,
     },
+    /// A face whose boundary cannot say which side of it a uv lies on (BW8).
+    NoUvSide {
+        /// The face.
+        face: FaceId,
+    },
     /// A face whose uv region has no box.
     NoUvBox {
         /// The face.
@@ -172,6 +191,12 @@ pub enum BodyqDefect {
     /// The body could not be moved into a seat's frame (BW11): the move is a rigid map, so
     /// this is a bug.
     Moved,
+    /// The certified gap between an edge's curve and another's failed inside, or could not
+    /// enclose the curve (BW10).
+    Gap {
+        /// The edge whose curve was measured.
+        edge: EdgeId,
+    },
     /// A shell whose cells give a negative first Betti number (`betti`).
     Betti {
         /// The shell.
@@ -217,6 +242,10 @@ impl BodyqError {
             Self::Refused(BodyqRefusal::Seat) => "seat",
             Self::Refused(BodyqRefusal::WrongSurface { .. }) => "wrong_surface",
             Self::Refused(BodyqRefusal::NoMaterialSide { .. }) => "no_material_side",
+            Self::Refused(BodyqRefusal::NotPickable { .. }) => "not_pickable",
+            Self::Refused(BodyqRefusal::Count) => "count",
+            Self::Refused(BodyqRefusal::Singular { .. }) => "singular",
+            Self::Defect(BodyqDefect::Gap { .. }) => "gap",
             Self::Unsupported(BodyqUnsupported::Nurbs { .. }) => "nurbs",
             Self::Unsupported(BodyqUnsupported::NonManifold { .. }) => "non_manifold",
             Self::Unsupported(BodyqUnsupported::NoClearSide { .. }) => "no_clear_side",
@@ -226,6 +255,7 @@ impl BodyqError {
             Self::Cancelled => "cancelled",
             Self::Defect(BodyqDefect::NoFaceBox { .. }) => "no_face_box",
             Self::Defect(BodyqDefect::NoUvBox { .. }) => "no_uv_box",
+            Self::Defect(BodyqDefect::NoUvSide { .. }) => "no_uv_side",
             Self::Defect(BodyqDefect::Surface { .. }) => "surface",
             Self::Defect(BodyqDefect::NoNormal { .. }) => "no_normal",
             Self::Defect(BodyqDefect::Ray) => "ray",
@@ -241,9 +271,11 @@ impl BodyqError {
         match e {
             SurfaceError::Exhausted(x) => Self::of_budget(x),
             SurfaceError::Stopped => Self::Cancelled,
-            SurfaceError::NurbsIntersection => Self::Unsupported(BodyqUnsupported::Nurbs {
-                at: Entity::Face(face),
-            }),
+            SurfaceError::NurbsIntersection | SurfaceError::Undecided { .. } => {
+                Self::Unsupported(BodyqUnsupported::Nurbs {
+                    at: Entity::Face(face),
+                })
+            }
             _ => Self::Defect(BodyqDefect::Surface { face }),
         }
     }
@@ -316,6 +348,18 @@ impl fmt::Display for BodyqError {
                     "{face}: has no outward side, material is on both or neither"
                 )
             }
+            Self::Refused(BodyqRefusal::Count) => {
+                f.write_str("fewer than two teeth or stations: the ends are two")
+            }
+            Self::Refused(BodyqRefusal::Singular { face }) => {
+                write!(
+                    f,
+                    "{face}: no normal or curvature there (a pole or an apex)"
+                )
+            }
+            Self::Refused(BodyqRefusal::NotPickable { kind }) => {
+                write!(f, "a {} has no place to pick by", kind.name())
+            }
             Self::Unsupported(BodyqUnsupported::Probe) => {
                 f.write_str("what a probe met of the body was not read")
             }
@@ -335,8 +379,17 @@ impl fmt::Display for BodyqError {
             Self::Cancelled => f.write_str("stopped"),
             Self::Defect(BodyqDefect::NoFaceBox { face }) => write!(f, "{face}: no box"),
             Self::Defect(BodyqDefect::NoUvBox { face }) => write!(f, "{face}: no uv box"),
+            Self::Defect(BodyqDefect::NoUvSide { face }) => {
+                write!(f, "{face}: the boundary cannot say which side a uv is on")
+            }
             Self::Defect(BodyqDefect::Surface { face }) => {
                 write!(f, "{face}: the surface refused a query")
+            }
+            Self::Defect(BodyqDefect::Gap { edge }) => {
+                write!(
+                    f,
+                    "{edge}: the gap to the other curve could not be bracketed"
+                )
             }
             Self::Defect(BodyqDefect::NoNormal { at }) => {
                 write!(f, "{at}: no normal at the nearest point")
