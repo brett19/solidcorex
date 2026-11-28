@@ -11,6 +11,9 @@
 //! - [`CompatibleCurves`]: curves of one knot vector (a surface's net lines, skinning
 //!   sections), with the curve edits applied to all of them at once, bit for bit.
 //!
+//! - [`fit`]: parameterisations, knot vectors, interpolation with end conditions and
+//!   least squares, on banded solves (FT2).
+//!
 //! A value that exists is valid: every check runs once, where it is built, so evaluation
 //! fails only for a parameter or arithmetic that cannot go on ([`NurbsError`]).
 //!
@@ -20,15 +23,17 @@
 //! without the pin's absolute `1e-12` knot tolerance, a knot difference fails only when it is
 //! exactly zero (not below `1e-24`), and the ends of the domain evaluate.
 //!
-//! Fitting, approximation, deviation, enclosures and IGES 126 build on these types later (01
+//! Fit certificates, deviation, enclosures and IGES 126 build on these types later (01
 //! §10.2 step 5); nothing here is a long-lived object with setters.
 
 mod basis;
 pub mod bezier;
+mod compatible;
 mod curve;
 mod curves;
 mod error;
 mod eval_over;
+pub mod fit;
 mod knots;
 mod point;
 mod reverse;

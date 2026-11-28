@@ -14,7 +14,7 @@
 //! |---|---|---|
 //! | Bézier pieces, `BoxTree::pairs`, pairs dropped only by proof ([`Candidates`]) | 4 | |
 //! | loop-free pairs (normal cones, Sederberg-Meyers, the critical-point solve), boundary seeds, splitting to `Unresolved` ([`Survey`]) | 5 | where no side has an implicit form, a pair with a seed, a node or a point a loop may surround is [`SsiError::Untraced`] there |
-//! | the field path when a side has an implicit form; critical cells, valleys, poles | 6a, 6b | 6a landed: a touch, a tangency or a crossing inside a piece is `Unresolved` until 6b |
+//! | the field path when a side has an implicit form; critical cells, valleys, poles | 6a, 6b | 6a landed; 6b: valleys of the survey refused by name before its solve (a contact of order 2 `Untraced`, above 2 `Singular`); the field path's touches, tangencies and crossings inside a piece stay `Unresolved` |
 //! | the march for NURBS against NURBS, [`SsiError::Stalled`] | 7 | |
 //! | one knot vector, certification per span, [`SsiError::Uncertified`] | 8 | |
 //!
@@ -81,7 +81,9 @@ use crate::error::{SingularKind, SsiError};
 /// pair, each naming the place; [`SsiError::Budget`] when `budget` runs out;
 /// [`SsiError::Stopped`] when `stop` is set. Until row SM7 lands, a pair with a seed, a node or a
 /// point a loop may surround is `Untraced`, and a singular contact `Singular`, each at the
-/// least such point (by x, then y, then z), whatever the operands' order.
+/// least such point (by x, then y, then z), whatever the operands' order. A valley in a
+/// candidate pair ([`Survey::valleys`]) refuses the pair before any plan: `Singular` at the
+/// least flat one, else `Untraced` at the least one.
 pub fn intersect(
     a: &Surface,
     ae: &Extent2d,
@@ -96,6 +98,27 @@ pub fn intersect(
     let found = survey.candidates();
     if let Some(t) = field::trace(found, [a, b], [ae, be], found.floor(), budget, stop)? {
         return Ok(t);
+    }
+    // A valley refuses the whole intersection: its least point, a contact of order above 2
+    // (singular) before one of order 2 (a curve to trace).
+    let valleys = survey.valleys(budget, stop)?;
+    let flat = valleys
+        .iter()
+        .filter(|c| c.kind == CriticalKind::Valley { flat: true })
+        .map(|c| c.point)
+        .reduce(|p, q| if less(q, p) { q } else { p });
+    if let Some(at) = flat {
+        return Err(SsiError::Singular {
+            at,
+            kind: SingularKind::DegenerateForm,
+        });
+    }
+    if let Some(at) = valleys
+        .iter()
+        .map(|c| c.point)
+        .reduce(|p, q| if less(q, p) { q } else { p })
+    {
+        return Err(SsiError::Untraced { at });
     }
     let mut touches = Vec::new();
     // The refusal names the least point (x, then y, then z) of its kind, so it does not
@@ -115,7 +138,17 @@ pub fn intersect(
                         point: c.point,
                         uv: c.uv,
                     }),
-                    CriticalKind::Node => least(&mut untraced, c.point),
+                    // A contact of order above 2: an isolated touch and a curve of them are
+                    // not told apart.
+                    CriticalKind::Valley { flat: true } => {
+                        let kind = SingularKind::DegenerateForm;
+                        if singular.is_none_or(|(p, _)| less(c.point, p)) {
+                            singular = Some((c.point, kind));
+                        }
+                    }
+                    CriticalKind::Node | CriticalKind::Valley { flat: false } => {
+                        least(&mut untraced, c.point);
+                    }
                     _ if c.may_surround() => least(&mut untraced, c.point),
                     _ => {}
                 }

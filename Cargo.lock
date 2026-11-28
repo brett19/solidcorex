@@ -563,6 +563,7 @@ dependencies = [
  "scx-mass",
  "scx-num",
  "scx-nurbs",
+ "scx-planar",
  "scx-record",
  "scx-ssi",
  "scx-surface",
@@ -740,6 +741,15 @@ dependencies = [
 [[package]]
 name = "scx-repair"
 version = "0.1.0"
+dependencies = [
+ "scx-brep",
+ "scx-check",
+ "scx-curve",
+ "scx-mass",
+ "scx-num",
+ "scx-surface",
+ "scx-testkit",
+]
 
 [[package]]
 name = "scx-ssi"
