@@ -27,6 +27,10 @@ pub struct TorusFaces {
 /// at `major + minor`), 2 closed edges (the outer equator and the meridian through the
 /// vertex) and 1 face, with exact pcurves and the solid and outside regions decided.
 ///
+/// Radii within the resolution of each other make a horn torus, whose tube meets the axis:
+/// 1 vertex (the pole at the frame's origin), 3 edges (the meridian through the pole and
+/// the face's two collapsed edges) and 1 face.
+///
 /// # Errors
 ///
 /// - [`Refusal::Size`] for a radius that is not finite and above the document's
@@ -93,7 +97,7 @@ pub fn torus(
 /// The horn torus of `radius`: its tube meets the axis at the frame's origin. Its one vertex
 /// is that pole, so the face covers `v` over `[1/2, 3/2]` and its loop runs the pole's
 /// collapsed edge, the meridian (a circle through the pole, closed there), the collapsed
-/// edge back and the meridian down: 1 vertex, 2 edges, 1 face.
+/// edge at the far end and the meridian down: 1 vertex, 3 edges, 1 face.
 fn horn(frame: &Frame, radius: f64, doc: &Document) -> Result<Made<TorusFaces>, MakeError> {
     let surface = Surface::Torus(Torus::horn(
         *frame,
@@ -112,15 +116,17 @@ fn horn(frame: &Frame, radius: f64, doc: &Document) -> Result<Made<TorusFaces>, 
         Extent1d::new(PI, PI + TAU).ok_or(MakeError::Defect(Defect::Interval))?,
         [pole, pole],
     )?;
-    let collapsed = asm.collapsed(pole)?;
+    // The face's own collapsed edge at each end of its v range, as a revolve's whole circle
+    // has (the inner equator is both v = 1/2 and v = 3/2).
+    let (below, above) = (asm.collapsed(pole)?, asm.collapsed(pole)?);
     // Counter-clockwise over one period each way: along the pole (v = 1/2), up the
     // meridian a period on in u, back along the pole (v = 3/2), down the meridian.
     let face = asm.face(
         surface,
         &[vec![
-            (collapsed, Sense::Forward),
+            (below, Sense::Forward),
             (meridian, Sense::Forward),
-            (collapsed, Sense::Reversed),
+            (above, Sense::Forward),
             (meridian, Sense::Reversed),
         ]],
     )?;
