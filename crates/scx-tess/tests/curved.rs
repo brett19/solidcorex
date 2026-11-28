@@ -427,3 +427,11 @@ fn budget_and_stop_end_the_work() {
     let e = tessellate(&body, &s, &mut Budget::unlimited(), &stop).unwrap_err();
     assert_eq!(e, TessError::Cancelled);
 }
+
+#[test]
+fn horn_debug() {
+    let d = Document::default();
+    let b = torus(&at(), mm(6.0), mm(6.0), &d).unwrap().body;
+    let r = tessellate(&b, &spec(0.1), &mut Budget::unlimited(), &Stop::new());
+    println!("RESULT {:?}", r.as_ref().map(|m| m.triangles.len()));
+}

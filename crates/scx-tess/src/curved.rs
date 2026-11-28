@@ -625,6 +625,10 @@ pub(crate) fn curved_face(
         if added.is_empty() {
             break;
         }
+        if std::env::var("TESSDBG").is_ok() {
+            let bad: Vec<_> = tris.iter().filter_map(|t| corners(s, *t)).filter(|c| rules.bound(surface, c).is_none()).take(2).map(|c| (c.uv, c.pole)).collect();
+            eprintln!("TESSDBG round {round} added {} pts {} first {:?}", added.len(), s.uv.len(), bad);
+        }
         round += 1;
         if round > ROUNDS {
             return Err(defect(TessDefect::Refinement { face: id }));
