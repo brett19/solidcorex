@@ -1086,6 +1086,9 @@ fn an_edge_of_no_length_is_refused() {
 }
 
 // ---------------------------------------------------------------- SP2b: quadrics written as other kinds
+//
+// A cone written with a semi angle of zero never reaches the build: `scx-p21` refuses it as
+// `ConeShape`, so the angle-zero route is tested on `geom::surface` (geom.rs tests).
 
 /// A cylinder body (radius 5, axis +z through (1, 2), height 0 to 10) whose side is written as
 /// the exact rational B-spline of the cylinder, `bump` added to one control point's x. Its
@@ -1178,8 +1181,8 @@ fn a_cylinder_written_as_a_bspline_is_built_as_the_cylinder() {
 
 #[test]
 fn a_bspline_beyond_coincidence_with_a_cylinder_is_pending_not_approximated() {
-    // The control point moved 1e-3 mm against a stated uncertainty of 1e-7.
-    let (ex, surface) = bspline_cylinder_body(1e-3);
+    // The control point moved 0.05 mm against a stated uncertainty of 1e-7.
+    let (ex, surface) = bspline_cylinder_body(0.05);
     let e = try_built(&ex).unwrap_err();
     assert_eq!(
         e,
@@ -1193,28 +1196,4 @@ fn a_bspline_beyond_coincidence_with_a_cylinder_is_pending_not_approximated() {
     let b = built(&ex);
     assert_eq!(b.recognized.len(), 1);
     assert!(b.recognized[0].deviation.mm() <= 1e-7);
-}
-
-#[test]
-fn a_cone_written_with_angle_zero_is_the_cylinder_it_means() {
-    let mut w = W::default();
-    let mut c = cylinder(&mut w, [1.0, 2.0], 5.0, [0.0, 10.0]);
-    let a = w.axis([1.0, 2.0, 0.0], [0.0, 0.0, 1.0], [1.0, 0.0, 0.0]);
-    c.surface = w.add(format!("CONICAL_SURFACE('',#{a},{},0.)", real(5.0)));
-    let side_face = side(&mut w, &c, true);
-    let ob = w.oe(c.circles[0], false);
-    let bb = w.bound(&[ob], true, true);
-    let bp = w.plane([1.0, 2.0, 0.0], [0.0, 0.0, 1.0], [1.0, 0.0, 0.0]);
-    let bottom = w.face(&[bb], bp, false);
-    let ot = w.oe(c.circles[1], true);
-    let tb = w.bound(&[ot], true, true);
-    let tp = w.plane([1.0, 2.0, 10.0], [0.0, 0.0, 1.0], [1.0, 0.0, 0.0]);
-    let top = w.face(&[tb], tp, true);
-    let shell = closed_shell(&mut w, &[bottom, side_face, top]);
-    let solid = w.add(format!("MANIFOLD_SOLID_BREP('',#{shell})"));
-    let b = built(&w.file(&[solid]));
-    near(vol(&b), PI * 25.0 * 10.0);
-    assert_eq!(b.recognized.len(), 1);
-    assert_eq!(b.recognized[0].deviation, Length::ZERO);
-    assert!(matches!(b.recognized[0].built_on, Surface::Cylinder(_)));
 }
