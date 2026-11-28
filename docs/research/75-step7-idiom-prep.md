@@ -31,7 +31,9 @@ task. §9 holds the open questions, §10 the case against this plan, §11 the pr
   - JUDGED: a design judgement.
 - **Pin paths.** `K/` is the pin kernel's `src/`, `O/` is `solidcore-ops/src/`. `B/` is
   `K/boolean/`, `TI/` is `B/topology_intersector/`, `PT/` is `K/topology/proto_topology/`,
-  `PC/` is `K/primitive/primitive_creation/`. Line numbers are at the pin commit of 63.
+  `PC/` is `K/primitive/primitive_creation/`. `A/` is the app's
+  `crates/kernel/src/` in the pin's repository (the SolidCraft kernel crate that calls ops). Line
+  numbers are at the pin commit of 63.
 - **Nothing here was built or run on the pin.** It was read with grep, sed and wc only.
 
 ## 0. How the counts were made (MEASURED)
@@ -47,18 +49,21 @@ task. §9 holds the open questions, §10 the case against this plan, §11 the pr
 
 | Area | Pin files | Lines | Non-test swallows | Unit tests | Integration tests |
 |---|---|---|---|---|---|
-| Boolean (beyond the slice) | `B/` (33,434), `PT/` (23,105), `K/topology/brep/{cutting, planar_section}.rs` (2,028), `O/{boolean, split, trim}.rs` (2,639) | ~61,200 | ~240 (arena_pair 55, TI p1 30, imprint_ends 23) | ~250 | `O/../tests/boolean.rs` 78, `boolean_api.rs` 29, trim 17, split 19, kernel_cases 269 entries |
-| Make: revolve, sweeps, prisms | `K/sweep/` (26,303 with loft), `PC/` (20,700), `K/prism/` (662), `O/{sweep, prism}.rs` and helpers | ~45,000 | ~140 plus 28 `ignored` | ~280 | ops sweep 37 plus a 26-case closed-form table, prism 35, kernel sweep suite ~140 |
+| Boolean (beyond the slice) | `B/` (33,434), `PT/` (20,024), `K/topology/brep/{cutting, planar_section}.rs` (2,028), `O/{boolean, split, trim}.rs` (2,639) | ~58,100 | ~240 (arena_pair 55, TI p1 30, imprint_ends 23) | ~250 | `O/../tests/boolean.rs` 78, `boolean_api.rs` 29, trim 17, split 19, kernel_cases 269 entries |
+| Make: revolve, sweeps, prisms | `K/sweep/` (26,303 with loft), `PC/` (17,390; all of `K/primitive/` is 20,700), `K/prism/{extrude, sheet}.rs` (662 of the module's 19,613, of which 12,142 are in non-test files), `O/{sweep, prism}.rs` and helpers | ~44,400 | ~140 plus 28 `ignored` | ~280 | ops sweep 37 plus a 26-case closed-form table, prism 35, kernel sweep suite ~140 |
 | Make: loft, skins, patches | `loft_sections`, `loft_rails`, `warp`, `skin_*`, `section_blend`, `K/nurbs/{certificate, gordon, n_sided}.rs`, `sheet.rs`, `O/{surface, blend_surface, network}.rs` | ~17,400 | ~60 | ~120 | loft_rails 13, section_blend 9, two rails 4, skin 11, section orders 23 |
-| Deform | `K/surface/{b_spline_volume*, bend, twist, unbend, srf_in_volume}`, `K/surface/volume/`, `K/curve/crv_in_volume.rs` | 15,353 | ~100 | 85 | none |
-| Repair | `K/heal/` (23,663), `O/heal.rs` (329) | 23,992 | ~70 | 66 | ops heal 18 |
+| Deform | `K/surface/{b_spline_volume*, bend, twist, unbend, srf_in_volume}`, `K/surface/volume/`, `K/curve/crv_in_volume.rs` | 15,351 | ~100 | 85 | none |
+| Repair | `K/heal/` (23,663), `O/heal.rs` (329); in the app `A/{repair, heal, fill, delete_face, tolerance_heal}.rs` (708, 207, 1,675, 1,283, 372) | 28,237 | ~70 | 66 | ops heal 18 |
 
 ## 1. Shapes common to step 7, and the rulings
 
 ### 1.1 What the pin does on every path (READ)
 
-- **Retry on failure.** The ops Boolean (`O/boolean.rs:183-226`, `union_copies`) retries a union
-  that fails in `make_faceuse` with the operands swapped, then with `rebuild_native` operands. The
+- **Retry on failure.** One ops entry retries: `union_copies` (`O/boolean.rs:183-226`) retries a
+  union that fails in the radial sector search with the operands swapped under
+  `Contract::Proved`, then with `rebuild_native` operands. `boolean` and `boolean_with`
+  (:151, :160) do not retry, but every app union goes through `union_copies` (the app's
+  `crates/smlib/src/core/boolean.rs:51`), so every union the app makes can take the retry. The
   kernel's `glue_all_or_none` (`B/api_brep.rs:433`) restores a snapshot and goes on unglued.
   `classify_remaining` (`B/merge/p4.rs:1397`) casts a ray at fractions 0.45678 and 0.456789 along an
   edge and moves to the next edge when that fails (:1481, :1483). The curve sweep drops the exact
@@ -79,7 +84,9 @@ task. §9 holds the open questions, §10 the case against this plan, §11 the pr
 - **Global mode flags.** `set_doing_boolean` is saved and restored by hand at 13 sites
   (`K/sweep/topology_sweep/engine.rs:937-956`) and in the skin (`PC/p2/skin.rs:277-302`), where
   `set_editing(brep, true)` is never unset (:323). The app's heal holds a `static AtomicBool` and a
-  `thread_local` (`crates/kernel/src/tolerance_heal.rs:31-37`, outside the kernel).
+  `thread_local` (`A/tolerance_heal.rs:31-37`, outside the kernel), switched by the global
+  `set_heals_tolerance_defects` (re-exported at `A/lib.rs:623`; the review cited :621, which is
+  the `heal_tolerance_defects` re-export two lines above).
 - **Positional bools and integer modes.** `MergeOptions::new(false, true, false, false, true)`
   (`O/boolean.rs:425`); `TopologyIntersector`'s ten bools and a `u64` lamina mode
   (`TI/p1.rs:1221-1230`); `cap_ends: i32` with four meanings (`K/sweep/api_brep.rs:280`); 22
@@ -105,10 +112,12 @@ crate section applies it, and the contested ones are in §9.
   interferences, merged points, face-face, imprint, classify, build (BO1-BO4). The cellular merge
   is that pipeline over n operands without the final selection (04 row 16). No entry has its own
   intersector.
-- **R2. No retry, no operand swap, no rebuild.** A failure is a typed cause the caller sees. A
-  stage that the pin retries is either right on the first run or `Unsupported` with the cause
-  named. The result must not depend on operand order beyond the stated rule (`a`'s ids are kept);
-  BO10 tests it.
+- **R2. No retry, no operand swap, no rebuild.** A failure is a typed cause the caller sees. The
+  pin's one retry (`union_copies`, §1.1) exists because its radial sector search at a shared edge
+  depends on operand order; scx's ordering of faces about a shared edge is a function of the
+  geometry alone (BO12's proof covers it), so the union is right on its first run or
+  `Unsupported` with the cause named. The result must not depend on operand order beyond the
+  stated rule (`a`'s ids are kept); BO10 tests it, including the #20408 collars in both orders.
 - **R3. No tolerance ladders.** Coincidence is `max(res, acc₁, acc₂)` (09 §4) everywhere in step 7.
   None of the pin's factors (10, 4, 1.25, 5, 100, 1000) is ported. A stage that needs room proves a
   bound and records the accuracy it reached (a `Raise`), never widens a test.
@@ -146,8 +155,14 @@ the rulings remove, with the reason.
 | Pin capability | Called from ops | scx home | Row or replacement |
 |---|---|---|---|
 | `boolean`, `boolean_union/difference/intersection` (`B/api_brep.rs:687-722`) | yes | `scx_boolean::boolean` | BO1-BO9 (built); NURBS faces BO23 |
-| `boolean_with_options(Imprint)` (:785) | `O/boolean.rs:400`, `trim.rs:311` | `scx_boolean::imprint` | BO13 |
+| `boolean_with(.., Contract)` (`O/boolean.rs:160`; `Contract` at `O/body.rs:645`) | yes | no mode: `boolean` always gives what `Contract::Proved` gives (§2.6) | BO10b |
+| empty-result refutation (`Witnesses::refute`, `O/boolean.rs:281`; `Error::EmptyRefuted`) | yes | a postcondition of every `boolean` with an empty result (§2.6) | BO10b |
+| `boolean_with_options(Imprint)` (:785) | `O/boolean.rs:400` (returns `(Body, bool)`), `trim.rs:311` | `scx_boolean::imprint`; the bool is whether `Done.changes` is empty | BO13 |
+| `split_face_by_curves` (`O/trim.rs:237`): curves on one face, the regions returned for picking | yes | `scx_boolean::imprint_curves` | BO13b |
+| `trim_by_dropped_curves` (`O/trim.rs:438`): curves dropped onto faces, regions kept by points | yes | `scx_surface` drop (SF1), then `imprint_curves` and `keep` by points | BO16b |
 | `boolean_with_options(Slice)` | `O/split.rs:368` | `scx_boolean::split` | BO15 |
+| `split_faces` (`O/split.rs:282`): faces cut by several tools in turn, `Error::ToolStopsShort` | yes | `scx_boolean::split_faces` (one pass over all tools) | BO15b |
+| `split_body_by_sheet` (`O/split.rs:506`): sides named by one sheet face's normal | yes | `split` with `Tool::Sheet { sheet, facing }` | BO15 |
 | `boolean_with_curves` (:804) | `trim.rs:311` | `Done` of `imprint` carries the section edges in `changes` | BO13 |
 | `union_all` (`O/boolean.rs:310`) | yes | `scx_boolean::boolean_all` | BO11, then BO12 |
 | `merge_breps`, `boolean_lists`, `boolean_trees`, `non_manifold_boolean` | no | `scx_boolean::merge` (cellular) | BO12 |
@@ -155,14 +170,15 @@ the rulings remove, with the reason.
 | `boolean_merge` (stitch, measure in ops) | yes | `merge` plus `select(Union)`; measure's uses move to bodyq | BO12 |
 | `boolean_2d` (:902; `O/prism.rs:82`) | yes | `scx_boolean::planar` | BO17 |
 | `split_body` (`O/split.rs:423`, two Booleans on copies) | yes | `split` returns both sides from one pass | BO15 |
-| `cut_face` (`O/split.rs`) | yes | `split` with a face scope | BO15 |
-| `trim_sheet` (`O/trim.rs:276`) | yes | `scx_boolean::trim` | BO16 |
+| `trim_sheet` (`O/trim.rs:276`): regions kept by the points nearest them | yes | `scx_boolean::trim` with `keep: &[Point3]` | BO16 |
+| `remove_faces`, `remove_feature_with_crossing_patches`, `remove_round_junction`, `remove_ring_groove` (`O/trim.rs:767, :656, :670, :821`) | yes | `scx-local` (step 8, defeature) | step 8 |
+| `project_curves`, `face_section`, `drop_curves` (`O/sweep.rs:2039, :2097, :2167`) | yes | projection and drop in `scx-surface` (SF1); `face_section` is `section` scoped to a face | SF1, BO14 |
 | `PlaneCutter`, `cut`, `do_cut` (`K/topology/brep/cutting.rs`) | no | `section` by plane | BO14 |
 | `create_planar_section_curves`, `face_plane_section_curves` (`planar_section.rs`) | sweep only | `section` returning curves | BO14 |
 | face/face and body/body intersection | no ops API | `scx_boolean::intersect` | BO18 |
 | interference | none in the pin | `scx_boolean::interference` | BO19 |
 | same-body refusal (`ptr::eq`, `split.rs:510`) | yes | the same-body shortcut | BO20 |
-| caller-stated incidences | none in the pin | `boolean_with` and `Incidences` | BO21 |
+| caller-stated incidences | none in the pin | `boolean_given` and `Incidences` | BO21 |
 | tangent patches (`resolve_tangent_patches`, `p4.rs:509`, #17118) | inside | stated facts, closed form, then tracing | BO22 |
 | `matched_tolerances` (`operand_tolerances.rs`) | yes | not ported: coincidence rule (R3; 01 §1.3) | — |
 | `glue_self_touching_edges` (WR-754) | inside | not ported as a pass: a body that needs it fails `finish` | — |
@@ -173,7 +189,8 @@ the rulings remove, with the reason.
 | `sweep_along_segments`, `cornered_sweep` | `O/sweep.rs:1011` | `scx_make::sweep` on line and arc paths | MK5 |
 | `create_curve_sweep_with_placements` | `O/sweep.rs:1069` | `scx_make::sweep` general path | MK7b |
 | `stations`, `fractions` (rotation-minimising frames) | `controlled.rs` | `scx_make::frames` | MK7a |
-| `screw_sweep*` | `O/sweep.rs:1831, :1903` | `scx_make::screw` | MK6 |
+| `screw_sweep*`, with the radial law (`O/sweep.rs:1824-1871`) and joined walls (`Walls::Joined`, `K/sweep/screw.rs:53`, the app's `join_spline_walls`) | `O/sweep.rs:1831, :1903` | `scx_make::screw` with `Screw { law, walls }` | MK6 |
+| `SweepControl` twist, end scale, one or two rails (`A/sweep_path.rs:46-68`) | app | `scx_make::sweep`'s `PathFrame` | MK7b |
 | `sweep_whole` (whole-body sweep by silhouette, `engine.rs:1171`) | through `screw_sweep_with_body`, member | `scx_make::sweep_solid` | MK8 |
 | `create_sweep_along_planar_path` (`PC/p2/planar_path.rs`) | no | `sweep` on a planar path (MK5) | MK5 (no Boolean needed) |
 | `radial_sweep` (`local_operation.rs:404`) | through local ops | `scx_make::radial` | MK13 |
@@ -184,14 +201,21 @@ the rulings remove, with the reason.
 | `loft_rails`, `sweep_two_rails`, warp | `railed.rs`, `birail.rs` | `scx_make::loft` with rails | MK10b |
 | loft certificate (`K/nurbs/certificate.rs`) | `O/curve_knots.rs:53` | `scx_make::certificate` (01 §1.3) | MK10 |
 | Coons (`sheet.rs:469`), `n_sided`, `gordon` | `O/surface.rs:251, :285`; `network.rs` | `scx_surface::{coons, n_sided, gordon}` (01 §1.3), faces by `scx_make::face` | MK11 |
+| `ruled` (`O/surface.rs:340`), `reverse_sheet` (:366) | yes | `scx_make::ruled`; `reverse` as a Draft method | MK17 |
 | `section_blend`, `section_blend_surface` | `railed.rs`, `blend_surface.rs:168` | `scx_make::blend` | MK12 |
 | `blend_edges`, `fillet_sheets`, `fillet_crossing` (`O/blend_surface.rs`) | yes | `scx_make::blend` on SSI | MK12b |
 | `ruled_surface_from_offset` (taper only) | no | step 8 taper | — |
 | `create_taper_extrude*`, `taper_walls` | through extrude | step 8 taper | — |
 | `BendVolume`, `TwistVolume`, `UnbendVolume`, `SrfInVolume`, `CrvInVolume` | none | volume maps in step 5; `scx_deform::deform` | DF1-DF3 |
 | `BSplineVolume` (a stub upstream: always `SM_ERR`) | none | not ported until a caller exists | Q6 |
-| `heal_short_edges_and_slivers` (`tolerance_defects.rs:1221`) | `O/heal.rs:183` | `scx_repair::repair` | RP1-RP4 |
-| SMLib healer (`heal_data/`, `gap.rs`, `face_props.rs`) | `heal_made` on untrusted records | not ported: it widens tolerances (R3); its gap queries are SU6's bounds and its seam fixes are stitch and `finish` work | Q7 |
+| `heal_short_edges_and_slivers` (`tolerance_defects.rs:1221`) | `O/heal.rs:183` | `scx_repair::heal` | RP1-RP4 |
+| Repair Part step 1: rebuild a face SMLib refuses as its analytic surface (`A/repair.rs:11-14`) | app | `scx_repair::rebuild_analytic` | RP7 |
+| Repair Part step 2: sew free edges within a gap (`A/repair.rs:15-18`, `stitch_no_worse` at :246) | app | `scx_repair::sew` over `scx-stitch` | RP5 |
+| Repair Part step 3: patch free-edge holes, planar or G1 (`A/repair.rs:19-21`, `patch_holes` :582, `A/fill.rs:100` `patch_edges_with`) | app | `scx_repair::patch_holes` over MK11 | RP6 |
+| `RepairOptions { gap, patch_holes, heal_first }` (`A/repair.rs:51`) | app | separate entries and an ordered `&[Step]` list (§6.5) | RP8 |
+| faces on one surface and edges on one curve merged (`A/heal.rs`) | app, after operations | `scx-brep` Draft methods, called by the Boolean's build stage and by repair | BR11 |
+| delete face with heal (`A/delete_face.rs`) | app | `scx-local` (step 8) | step 8 |
+| SMLib healer (`heal_data/`, `gap.rs`, `face_props.rs`) | `heal_made` (`K/topology/brep/p10.rs:546`) on untrusted records, from `solidcore-convert/src/brep.rs:317` | not ported: it widens tolerances (R3); counted first (RP0) | RP0, Q7 |
 
 ## 2. `scx-boolean`: beyond the analytic slice
 
@@ -200,7 +224,7 @@ the rulings remove, with the reason.
 **Size and entries.** `B/` is 33,434 lines: `topology_intersector/` (p1 6,650, p2 3,589, p3 2,142,
 curved_strip 2,078, coincident_strip 1,112, duplicate_edge_run 362), `merge/` (p4 3,000 with
 kernel_adapter 2,548 and arena_pair 2,448, p2 2,483, p1 2,124, p3 1,950, p5 799) and `api_brep.rs`
-1,636. The proto topology it builds on is another 23,105 (`PT/p2.rs` 6,958, `p1/proto.rs` 5,187,
+1,636. The proto topology it builds on is another 20,024 (`PT/p2.rs` 6,958, `p1/proto.rs` 5,187,
 `p3.rs` 3,873, `p2/imprint_ends.rs` 1,522). The ops entries are `O/boolean.rs` 557, `O/split.rs`
 553 and `O/trim.rs` 892.
 
@@ -218,8 +242,11 @@ the plane cutter have no ops caller.
 2. `Witnesses::of` copies the other operand (:276).
 3. `sm::boolean`, then `update_tolerances_after_boolean`.
 4. An empty result is checked against vertex locations (`refute`, :281).
-5. On a radial-sector failure (:231), retry with the operands swapped under `Contract::Proved`
-   (:204-215), then with `rebuild_native` operands (:216-226).
+5. In `union_copies` only (:183-226): on a radial-sector failure (:231), retry with the operands
+   swapped under `Contract::Proved` (:204-215), then with `rebuild_native` operands (:216-226).
+   `boolean` and `boolean_with` run once; every app union calls `union_copies`. Its regression
+   is `tests/boolean.rs:50-75`, the #20408 collars: two swept parts whose coaxial 1.3 mm collars
+   overlap over 2 mm, joined to the sum of the volumes less π·1.3²·2.
 
 **The kernel** (`merge_boolean_by`, `api_brep.rs` near :606) glues self-touching edges first
 (WR-754), then runs `manifold_boolean` (`p4.rs:2257`) when both operands are manifold solids and
@@ -366,15 +393,19 @@ impl Merged {
 pub fn imprint(target: &Brep, tool: &Brep, what: Imprint, cx: &mut Cx<'_>)
     -> Result<Done<NoItems>, BooleanError>;
 
-// Split (BO15): both sides from one pass. `Tool` is a surface (bounded by the body) or a sheet.
+// Split (BO15): both sides from one pass. `Tool` is a surface (bounded by the body) or a sheet,
+// whose sides are named by one of its faces' normals (`split_body_by_sheet`).
 pub fn split(body: &Brep, tool: &Tool, cx: &mut Cx<'_>) -> Result<Done<Sides>, BooleanError>;
+pub enum Tool { Surface(Surface), Sheet { sheet: Brep, facing: FaceId } }
 pub struct Sides { pub front: Vec<RegionId>, pub back: Vec<RegionId> }
 
 // Sections (BO14): the sheet (or wire, for a sheet operand) where a surface meets the body.
 pub fn section(body: &Brep, by: &Surface, cx: &mut Cx<'_>) -> Result<Done<NoItems>, BooleanError>;
 
-// Trim a sheet by a sheet (BO16): the pieces of `sheet` on the kept side of `by`.
-pub fn trim(sheet: &Brep, by: &Brep, keep: Side, cx: &mut Cx<'_>) -> Result<Done<NoItems>, BooleanError>;
+// Trim a sheet by a sheet (BO16): the connected regions of `sheet`, cut where `by` meets it, that
+// lie nearest the points in `keep` (as `trim_sheet` picks). A point as near two regions is
+// Refused(AmbiguousPick { point }); a cut that separates nothing is Refused(DoesNotCut).
+pub fn trim(sheet: &Brep, by: &Brep, keep: &[Point3], cx: &mut Cx<'_>) -> Result<Done<NoItems>, BooleanError>;
 
 // The 2-D Boolean of two coplanar sheets (BO17).
 pub fn planar(a: &Brep, b: &Brep, op: BooleanOp, cx: &mut Cx<'_>) -> Result<Done<NoItems>, BooleanError>;
@@ -387,15 +418,46 @@ pub fn interference(a: &Brep, b: &Brep, cx: &mut Cx<'_>) -> Result<Interference,
 pub enum Interference { Apart { gap: Bracket }, Touch { at: Vec<Contact> }, Overlap { depth: Bracket } }
 
 // Stated incidences (BO21): facts the caller asserts, each checked; a false one is Refused(FalseFact).
-pub fn boolean_with(a: &Brep, b: &Brep, op: BooleanOp, facts: &Incidences, cx: &mut Cx<'_>)
+pub fn boolean_given(a: &Brep, b: &Brep, op: BooleanOp, facts: &Incidences, cx: &mut Cx<'_>)
+    -> Result<Done<NoItems>, BooleanError>;
+
+// Curves lying on one face (BO13b): imprinted, the regions they bound returned for picking.
+pub fn imprint_curves(body: &Brep, face: FaceId, curves: &[Curve], cx: &mut Cx<'_>)
+    -> Result<Done<Regions>, BooleanError>;
+
+// Several faces cut by several tools in one pass (BO15b).
+pub fn split_faces(body: &Brep, faces: &[FaceId], tools: &[Tool], cx: &mut Cx<'_>)
     -> Result<Done<NoItems>, BooleanError>;
 ```
 
+- **Proof is the default, not a mode.** The pin's `boolean_with` takes `Contract::{Closed,
+  Proved}` (`O/body.rs:645`): Closed checks topology only; Proved requires each solid operand
+  proved valid and facing out, and the result proved likewise. scx has no `Contract` parameter.
+  Operands are finished bodies (`scx-brep`'s `finish` holds the topology and the outward sense
+  as data), and `boolean` always gives Proved's result: a solid result is a closed manifold that
+  `finish` accepts and its outward sense is established from the operands' senses and the
+  selection, not assumed. A result that cannot be established is a typed `Defect`, never a
+  weaker result. The full geometric check stays outside the operation (04 row 107's result
+  contract), and every test runs it.
+- **The empty result is refuted (ported postcondition).** When the selection leaves no material,
+  `boolean` checks the pin's witness before returning it: every vertex of each operand is
+  classified against the other (charged to the budget, a cost linear in vertices), and one that
+  shows material must remain (for a subtraction, a vertex of `a` strictly outside `b`; for an
+  intersection, one strictly inside both) makes the result `Defect(EmptyRefuted { at })`. The
+  pin returns this as an error to the caller (`Error::EmptyRefuted`); in scx it is a defect,
+  because it means the pipeline is wrong, not the input.
 - **The same-body shortcut** (BO20) is inside `boolean`: when `a` and `b` are the same `Brep`
   (`ptr::eq`, or equal body ids in one document after 04's id rules), union and intersection
   return `a` and subtraction the empty body, with no stages run. Two bodies that are equal but not
   the same are run through the pipeline; BO10's idempotence tests prove the pipeline gets them
   right.
+- **Imprint: what exists and what is left.** `scx-boolean/src/imprint.rs` (1,227 lines) is the
+  slice's stage 5, crate-private: it writes the interference and face-face results into
+  `a.edit()`. BO13 adds the public entry that stops there (finishing the imprinted Draft with no
+  selection), the `Imprint` choice (edges only, or edges and the tool's faces lying on the
+  target), `Done.changes` as the pin's `(Body, bool)` (the bool is "changes not empty"), and
+  tests. That is small, so BO13 runs before BO12 and accepts the rework when BO12 generalises the
+  stage beneath it; the entry and its tests are unchanged by that rework.
 - **Imprint order.** 01 says "imprint in a stated dimension order". The rule: vertices first, then
   edges, then faces, each in id order, so an edge's cut points exist before the edge is cut. That
   is already the slice's stage order; `imprint` stops after stage 5.
@@ -530,6 +592,9 @@ pub fn sweep(profile: &Region, path: &Path, frame: PathFrame, doc: &Document)
     -> Result<Made<SweepFaces>, MakeError>;
 pub fn frames(path: &Path, law: &FrameLaw, cx: &mut Cx<'_>) -> Result<Frames, MakeError>;
 pub fn screw(profile: &Region, motion: &Screw, doc: &Document) -> Result<Made<SweepFaces>, MakeError>;
+pub struct Screw { /* axis, pitch, turns, law: Option<RadialLaw>, walls: Walls { Pieces, Joined } */ }
+pub struct PathFrame { /* orientation, twist, end scale, rails: Vec<Rail>, rail_fit: RailFit */ }
+pub fn ruled(a: &Curve, b: &Curve, doc: &Document) -> Result<Made<FaceId>, MakeError>;
 pub fn sweep_solid(tool: &Brep, path: &Path, cx: &mut Cx<'_>) -> Result<Done<NoItems>, MakeError>;
 pub fn radial(cone: &RadialCone, doc: &Document) -> Result<Made<RadialFaces>, MakeError>;
 pub fn prism(regions: &[Region], frame: &Frame, span: Span, doc: &Document)
@@ -539,10 +604,18 @@ pub fn face(surface: &Surface, bound: &FaceBound, doc: &Document) -> Result<Made
 ```
 
 - **Profiles touching the axis.** A profile segment on the axis is not a face; its ends become
-  pole vertices (a sphere's or cone's apex) with `OnChart` pcurves (SM1, SM1b). A profile that
-  crosses the axis gives a body that passes through itself, so it is `Refused(CrossesAxis)` with
-  the crossing point. The pin splits such a profile (WR-590) and revolves each side; that builds a
-  different solid from the one asked for, so scx refuses and lets the caller split (Q3).
+  pole vertices (a sphere's or cone's apex) with `OnChart` pcurves (SM1, SM1b). A profile curve
+  that touches the axis at an interior point (a circle tangent to the axis, revolved to a horn
+  torus) is split there and the touch point becomes a pole vertex shared by the two pieces' faces,
+  as the pin does (WR-590, `PC/p3/sweeps.rs:181-194`, `split_curves_on_axis`). Only a curve that
+  truly crosses the axis, so the body would pass through itself, is `Refused(CrossesAxis { at })`;
+  the pin refuses the same case (`SweepFailure::EdgeCrossesRotationAxis`,
+  `K/sweep/rotational_sweep_geometry.rs:364`). WR-590's test is ported as a build test (Q3).
+- **The plane snap rule** (Q10). A profile line whose two ends lie at axial heights within the
+  document's coincidence of each other revolves to a plane normal to the axis, at the start
+  vertex's height; the end vertex lies within coincidence of that plane and its measured distance
+  is recorded as the vertex's accuracy. Any other line revolves to a cylinder (both ends at one
+  radius within coincidence) or a cone, however low. No height floor applies.
 - **Caps.** `RevolveFaces::start` and `end` are `None` for a full turn. An open (uncapped) result is
   a separate constructor (`revolve_sheet`), never a `cap: bool`.
 - **Mitres.** A corner in a line-and-arc path is a mitre plane through the corner bisecting the
@@ -581,7 +654,12 @@ or more fit an affine move then an inverse-multiquadric warp (#12188). The two-r
 NURBS Book §10.4.
 
 **Coons, Gordon, n-sided.** Coons (`sheet.rs:469`) makes opposite sides compatible and calls the
-upstream patch; no certificate; folds are looked for on a 5×5 normal grid. Gordon
+upstream patch; no certificate; folds are looked for on a 5×5 normal grid. The ops `boundary`
+(`O/surface.rs:251`) takes three or four curves to a Coons patch with no stitch; five or more go
+to `n_sided` (:256), whose patches are stitched into one sheet (`sheet_of`, `stitch_faces` at
+:326). (The review said the Coons boundary stitches; it is the n-sided path that does.) MK11
+builds the n-sided sheet with its shared sides known, so it needs no `scx-stitch`; RP6, which
+sews a patch into a body, does. Gordon
 (`K/nurbs/gordon.rs`) is `L1 + L2 − T` with crossings from curve intersections, refitting an
 incompatible network by a monotone map doubling from 8 to 64 points per span, then certified and
 refused past the tolerance. n-sided (`n_sided.rs`) fills N quads round a centre; G0 is certified,
@@ -656,6 +734,10 @@ pub struct LoftFaces { pub start: Option<FaceId>, pub end: Option<FaceId>, pub w
 - `Made::body`'s faces carry the certificate's bound as their recorded accuracy. A span the
   certificate cannot prove within the document's resolution under its fixed budget is recorded as
   a `Raise` with the bound reached (R6), never a refusal; `RailPastStationCap` becomes that.
+- `Pairing` carries its status: exact within the fixed per-operation cell limit (the pin's
+  MAX_CELLS), else the banded answer, `Proven` when its walk avoids the band's edge and `Unproven`
+  with its cost as the bound otherwise (Q5). The limit is a constant, not the remaining budget, so
+  the answer is a function of the input.
 - Flat walls are planes because the section pair is planar and coplanar with the rail, decided
   before the skin is built (R5), not by replacing a built B-spline.
 - `scx_surface::{coons, gordon, n_sided}` return a `NurbsSurface` with its certified deviation, and
@@ -666,12 +748,19 @@ pub struct LoftFaces { pub start: Option<FaceId>, pub end: Option<FaceId>, pub w
 ### 5.1 What the pin does (READ)
 
 **The app cannot deform a body today.** No kernel function maps a body through a volume and ops has
-no deform entry. The pin has volume geometry kinds that are read from records and evaluated:
+no deform entry. Evidence (grep for `BendVolume`, `TwistVolume`, `UnbendVolume`, `SrfInVolume`,
+`CrvInVolume` followed by a constructor, outside their own files): seven sites, all under
+`#[cfg(test)]` (`K/heal/stitch/bounds.rs:1762`, test module from :1548;
+`K/curve/crv_on_surf.rs:2863, :2890, :2956`, from :2311; `K/curve/curve/p2.rs:4876`, from :4607;
+`K/surface/surface/p5.rs:2725`, from :2661; `K/surface/surface/p2.rs:8414, :8614`, from :8023).
+The other files that name the kinds match on them to read or evaluate. The pin has volume geometry kinds that are read from records and evaluated:
 `BendVolume` (`bend_volume.rs`, 1,973), `TwistVolume` (1,208), `UnbendVolume` (1,671), `SrfInVolume`
 (1,370), `CrvInVolume` (`K/curve/crv_in_volume.rs`, 1,978), the generic `Volume` chain
 (`surface/volume/p1.rs` 3,278, `p2.rs` 2,057). `BSplineVolume` is a stub that always returns
-`SM_ERR` (upstream builds without `USE_VOLUMES`). Sheet-metal develop does not use the unbend
-volume; it unrolls with its own rigid maps (`fold.rs:75, :412`). `api_transform.rs:152-157` refuses
+`SM_ERR`: upstream builds without `USE_VOLUMES`, and the port follows the build
+(`K/surface/b_spline_volume.rs:32-58`; `load_nlib_transform` at :191 always errs). Sheet-metal develop does not use the unbend
+volume; it unrolls with its own maps: `Wrap` (`K/develop/fold.rs:60-90`, the neutral-arc wrap)
+and `bent_across` (:412, a `Rigid3`), and no file in `K/develop/` names a volume. `api_transform.rs:152-157` refuses
 to transform a standalone volume curve or surface.
 
 **The maps.** Bend sends (u, v, w) to (u cos(v/d), u sin(v/d), w), singular on the axis; unbend is
@@ -743,8 +832,24 @@ There are two healers, and neither uses a Boolean.
    runs the full check on both, and keeps the copy only if no tolerance grew, it fails fewer tests,
    and no failure class got worse (`O/heal.rs:236-311`).
 2. **The SMLib healer** (`heal_data/`, `gap.rs`, `face_props.rs`; about 22,000 lines), ported for
-   parity, called only by `heal_made` on untrusted records. It widens tolerances by a model-size
-   ladder and by `gap_gain * gap`.
+   parity, called only by `heal_made` (`K/topology/brep/p10.rs:546`, from
+   `solidcore-convert/src/brep.rs:317`) on untrusted records. It widens tolerances by a model-size
+   ladder and by `gap_gain * gap`. How many corpus records it actually fixes is not known (RP0).
+
+The app's **Repair Part** (`A/repair.rs`) runs, in order:
+
+0. the certified heal above, when `heal_first` is set;
+1. an analytic rebuild: cylinder, cone, sphere and torus faces that SMLib refuses on their NURBS
+   form are rebuilt as the analytic surface (`A/repair.rs:11-14`);
+2. sewing within the gap: free edges paired within `gap` are glued, through `stitch_no_worse`, with
+   each glued edge's tolerance at least twice the gap (`A/repair.rs:17`, the stitch tolerance
+   `widest * 1.05` at :244);
+3. hole patches, when `patch_holes` is set: free loops filled by `A/fill.rs:100` (a plane face, or
+   a patch meeting its neighbours G0 or G1), then sewn again.
+
+The steps are chosen by `RepairOptions { gap, patch_holes, heal_first }` (`A/repair.rs:51`). Beside
+it, `A/heal.rs` merges faces on one surface and edges on one curve, and `A/delete_face.rs` deletes
+faces and heals the opening (step 8's `scx-local`).
 
 ### 6.2 Idiom hazards (READ)
 
@@ -753,7 +858,13 @@ There are two healers, and neither uses a Boolean.
 - `O/heal.rs:239-240`: `.ok()` on lookups, so a removed entity skips the growth check.
 - The SMLib healer: `ignore_status` 9 times; 18 `let _ =` in `p2.rs`; 42 bool or tri-state fields;
   `HealerOpType` by integer code; `gap.rs` reads through `&mut Brep`.
-- The app's `static AtomicBool` and `thread_local`.
+- The app's `static AtomicBool` and `thread_local`, switched by the global
+  `set_heals_tolerance_defects` (`A/lib.rs:623`): whether import and Repair heal depends on a
+  process-wide setting, not on the call.
+- `RepairOptions`' two bools (`patch_holes`, `heal_first`) choose which steps run; with `gap` they
+  make one entry with four behaviours.
+- `A/repair.rs:17`, :244: the sewn edge's tolerance is set by a factor (2× the gap, 1.05× the
+  widest), not by the gap measured.
 
 ### 6.3 Truths and tests (READ)
 
@@ -769,22 +880,60 @@ with a linear `find` per edge (:728-750); faces+1 outer rounds.
 
 ### 6.5 Proposed shape (JUDGED)
 
+Each repair the app runs is its own entry, so no option bool chooses a step (the pin's
+`RepairOptions { gap, patch_holes, heal_first }`, `A/repair.rs:51`). The app's Repair Part is an
+ordered list of steps, run in order, each step's `Done` the next step's input and its `Changes`
+composed.
+
 ```rust
-pub fn repair(body: &Brep, what: &Repairs, cx: &mut Cx<'_>) -> Result<Done<RepairCause>, RepairError>;
-pub struct Repairs { /* short_edges, slivers, empty_pieces; #[non_exhaustive], with_* */ }
-pub enum RepairCause { NotWithinTolerance { edge: EdgeId, bound: Bracket }, NotCoincident { face: FaceId, bound: Bracket }, /* … */ }
+// The certified healer (RP1-RP3): short-edge clusters, slivers, empty pieces.
+pub fn heal(body: &Brep, cx: &mut Cx<'_>) -> Result<Done<HealCause>, RepairError>;
+// A face on a NURBS form that is exactly an analytic surface goes as that surface (RP7).
+pub fn rebuild_analytic(body: &Brep, cx: &mut Cx<'_>) -> Result<Done<RebuildCause>, RepairError>;
+// Free edges that pair within `gap` sewn (RP5), through scx-stitch.
+pub fn sew(body: &Brep, gap: Length, cx: &mut Cx<'_>) -> Result<Done<SewCause>, RepairError>;
+// Loops of free edges no pair explains filled by a patch and sewn in (RP6).
+pub fn patch_holes(body: &Brep, cx: &mut Cx<'_>) -> Result<Done<PatchCause>, RepairError>;
+// The app's Repair Part (RP8): the steps in the order given.
+pub fn repair(body: &Brep, steps: &[Step], cx: &mut Cx<'_>) -> Result<Done<StepCause>, RepairError>;
+pub enum Step { Heal, RebuildAnalytic, Sew { gap: Length }, PatchHoles }
 ```
 
-- Items are the defects found (each short-edge cluster, each sliver, each empty piece) in id order,
-  so the default reports the lowest failing one and `Skip` mode repairs the rest (01 §5.2). This
-  replaces "reported and never retried".
-- Every edit is certified locally (step 3's enclosure, the GAP_SHARE rule on SU6's bounds), so the
-  result is valid by construction. The run-time check-compare of the ops wrapper is not ported; the
-  tests assert it instead (Q8).
-- No tolerance grows. A repair that would need a larger accuracy is a `RepairCause`, never a raise.
-- Lines and planes exactly; B-spline end control points moved; analytic edges other than lines
-  are converted to their exact NURBS form only for the moved end (an arc re-ended is still an arc
-  if both ends stay on its circle, which the enclosure decides).
+- Items are the defects found (each short-edge cluster, each sliver, each empty piece, each
+  free-edge pair, each hole, each face to rebuild) in id order, so the default reports the lowest
+  failing one and `Skip` mode does the rest (01 §5.2). This replaces "reported and never retried"
+  and the pin's "a heal that cannot run is skipped and the steps below go on" (`A/repair.rs:9-10`),
+  which becomes `Skip` mode stated by the caller.
+- **heal.** Every edit is certified locally (step 3's enclosure, the GAP_SHARE rule on SU6's
+  bounds), so the result is valid by construction. The run-time check-compare of the ops wrapper is
+  not ported; the tests assert it instead (Q8). No accuracy grows: a cluster that would need a
+  larger accuracy is a `HealCause`. Lines and planes exactly; B-spline end control points moved; an
+  arc re-ended stays an arc if both ends stay on its circle, which the enclosure decides.
+- **sew.** Each pair of free edges whose certified gap is within `gap` becomes one edge, keeping one
+  of the pair's curves, as the pin does. The kept edge's accuracy is the certified gap bound
+  itself, recorded in `report.raised` with the pair: an accuracy the edge measurably has, which 01
+  requires every writer to record before `finish`. The pin's factor (`SmBrep::GlueEdgesGeneral`
+  gives at least twice the gap, `A/repair.rs:17`, and the stitch tolerance `widest * 1.05`, :244)
+  is not ported (R3). The body's resolution and every other edge stay as they were. A pair beyond
+  `gap` is a `SewCause::TooFar { gap: Bracket }` with a `Resize` remedy.
+- **patch_holes.** A loop of free edges is filled: by a plane face when the loop lies on one plane
+  within coincidence and its neighbours are that plane (exact, G0); otherwise by MK11's n-sided or
+  Coons patch meeting the neighbours G1. G0 is certified; a G1 join that the certificate cannot
+  prove is recorded `Unproven` with its bound (R10), the patch kept, as 01's Setback hole fill does.
+  Extending the neighbours is not done (as in the pin). The patch is sewn in by `sew`'s rule.
+- **rebuild_analytic.** The pin rebuilds a cylinder, cone, sphere or torus face that SMLib refuses
+  on its NURBS form (`A/repair.rs:11-14`). scx accepts NURBS faces, so the reason is different:
+  exact analytic faces make every later SSI and classify closed-form. A face is rebuilt only when a
+  certificate proves its NURBS form is the analytic surface (MK10's `on_circle` and
+  `turn_about_axis`, the same Bernstein bounds); a face the certificate refutes or cannot decide is
+  left as it is and listed, never rebuilt by sampling.
+- **Face and edge merge** (`A/heal.rs`: faces on one surface meeting along an edge become one; two
+  edges on one curve meeting at a vertex nothing else uses become one) goes in `scx-brep` as Draft
+  methods (BR11), not in the Boolean's build stage. Reason: the Boolean's build calls it at the end
+  (SMLib's Booleans do the same), repair calls it, and step 8's local operations will; the lowest
+  crate all three use is `scx-brep`, and the edit is pure topology over a test of equal surfaces
+  and curves that `scx-brep` already defines. Faces split on purpose (the pin's split lines) are
+  kept apart by a typed set of protected edges passed in, not a flag on the body.
 
 ## 7. Task table
 
@@ -794,95 +943,134 @@ names each new Cargo dependency; each must be legal under layers.txt after LY2.
 
 | Id | Crate | Work | Needs | Edges | Model |
 |---|---|---|---|---|---|
-| LY2 | layers | Add `scx-deform` after `scx-hlr` and `scx-repair` after `scx-make` in layers.txt; correct 01's boolean → stitch edge (Q2); new crates take test bodies from testkit | — | — | Sonnet |
-| BO10 | boolean (tests) | The algebra suite on the testkit recipes (§8.1): commutativity, idempotence, A − A = ∅, absorption, De Morgan within a box, inclusion-exclusion, associativity, A = (A − B) ∪ (A ∩ B); judged by volume, area, the T10 oracle and the contract; run twice and compared by bits | — | — | Sonnet |
-| BO11 | boolean | `boolean_all`: n-ary union, subtraction and intersection as a balanced fold in operand order, work summed in order; port `union_all`'s closed-form tests | BO10 | — | Sonnet |
-| BO12 | boolean | `merge` and `select`: the cellular merge over n operands (stages 1-6 generalised, membership per cell, two-sided faces and laminas by 04 row 16); `boolean` and `boolean_all` become selections; proof that a cell's membership does not depend on operand order | BO10, BO25 | — | Opus |
-| BO13 | boolean | `imprint` (stop after stage 5) with the `Imprint` choice; section edges in `Changes` | — | — | Sonnet |
-| BO14 | boolean | `section` by a surface: sheet result for a solid, wire for a sheet; plane against quadrics now, NURBS after SM9 | BO25 | — | Opus |
-| BO15 | boolean | `split` by a surface or sheet: both sides from one pass; `cut_face` as a face-scoped split; port `O/split.rs` tests that assert areas and volumes | BO12 | — | Opus |
-| BO16 | boolean | `trim` a sheet by a sheet; port `tests/trim.rs:371`, `:627` | BO12 | — | Opus |
+| LY2 | layers | layers.txt: `scx-deform` after `scx-hlr`, `scx-repair` after `scx-make`. 01's table is amended in this branch (rows for boolean, deform, make, repair; §7.2). New crates take test bodies from testkit | — | — | Sonnet |
+| BO10 | boolean (tests) | The algebra suite on the testkit recipes (§8.1), including the coaxial shared-edge collar recipes in both operand orders and the #20408 collars (`tests/boolean.rs:50-75`) as a mandatory truth; judged by volume, area, the T10 oracle and the contract; run twice and compared by bits | — | — | Sonnet |
+| BO10b | boolean | Fix what BO10 finds on the slice, before BO12 builds on it; with it, proof as the default (no `Contract`) and the empty-result refutation as a postcondition (§2.6) | BO10 | — | Opus |
+| BO11 | boolean | `boolean_all`: n-ary union, subtraction and intersection as a balanced fold in operand order, work summed in order; port `union_all`'s closed-form tests | BO10b | — | Sonnet |
+| BO12 | boolean | `merge` and `select`: the cellular merge over n operands (stages 1-6 generalised, membership per cell, two-sided faces and laminas by 04 row 16); `boolean` and `boolean_all` become selections; proof that a cell's membership, and the radial order of faces about a shared edge, depend on the geometry alone and not on operand order | BO10b, BO25 | — | Opus |
+| BO13 | boolean | `imprint`: the public entry over the existing stage 5 (`imprint.rs`), finishing with no selection; the `Imprint` choice; `Done.changes` for the pin's `(Body, bool)`. Runs before BO12, rework accepted (§2.6) | — | — | Sonnet |
+| BO13b | boolean | `imprint_curves`: curves lying on one face imprinted, the regions they bound returned (`split_face_by_curves`); curves with exact pcurves now, others after the fitter | BO13 | — | Sonnet |
+| BO14 | boolean | `section` by a surface: sheet result for a solid, wire for a sheet; scoped to one face for `face_section`; plane against quadrics now, NURBS after SM9 | BO25 | — | Opus |
+| BO15 | boolean | `split` by a surface or a sheet (sides named by a sheet face's normal): both sides from one pass; port `O/split.rs` tests that assert areas and volumes | BO12 | — | Opus |
+| BO15b | boolean | `split_faces`: several faces by several tools in one pass; `Refused(ToolStopsShort { tool, face })` when nothing splits and a tool ends inside a face | BO15 | — | Sonnet |
+| BO16 | boolean | `trim` a sheet by a sheet, keeping the regions nearest given points; `AmbiguousPick`, `DoesNotCut`; port `tests/trim.rs:371`, `:627` | BO12 | — | Opus |
+| BO16b | boolean | `trim_by_dropped_curves`: curves dropped onto faces (SF1), imprinted (BO13b), regions kept by points | BO13b, BO16, SF1 | boolean → surface (exists) | Sonnet |
 | BO17 | boolean | `planar`: the 2-D Boolean of coplanar sheets on `scx-planar` regions, faces built with exact pcurves | — | — | Sonnet |
-| BO18 | boolean | `intersect`: the curves and points two bodies meet in, as a wire body, from stages 1-4 | — | — | Sonnet |
+| BO18 | boolean | `intersect`: the curves and points two bodies meet in, as a wire body (shells listing wire edges exist in `scx-brep`, `finish.rs:100, :182`), from stages 1-4 | — | — | Sonnet |
 | BO19 | boolean | `interference`: apart (with a certified gap), touching (contacts), or overlapping (a certified depth); stages 1-2 with BW3's bounds | BW3 | boolean → bodyq (exists) | Opus |
-| BO20 | boolean | The same-body shortcut; tests that equal but distinct bodies give the same results through the pipeline | BO10 | — | Sonnet |
-| BO21 | boolean | `boolean_with` and `Incidences`: stated face-on-face and edge-on-face facts, each checked (`Refused(FalseFact)`), used to skip their SSI | — | — | Opus |
+| BO20 | boolean | The same-body shortcut; tests that equal but distinct bodies give the same results through the pipeline | BO10b | — | Sonnet |
+| BO21 | boolean | `boolean_given` and `Incidences`: stated face-on-face and edge-on-face facts, each checked (`Refused(FalseFact)`), used to skip their SSI | — | — | Opus |
 | BO22 | boolean | Tangent contact: stated facts, then closed form (SM2), then tracing (SM6b); lifts the BO7 limits on tangent pairs | BO21; tracing waits on SM6b | — | Opus |
 | BO23 | boolean | NURBS faces: stage 4 on `General` (SM9), stage 5 pcurves by the fitter, stage 6 classify by step 5's ray against NURBS | SM9, the fitter, the NURBS ray | — | Opus |
 | BO24 | boolean | Lift `Unsupported(Pcurve)` on analytic faces whose cut curve has no closed-form pcurve (a quartic on a torus) by the fitter | the fitter | — | Opus |
 | BO25 | boolean | Non-manifold results: sheets, laminas, mixed regions in the build stage; `Unsupported(NonManifold)` kept only for what scx-brep cannot hold | — | — | Opus |
-| DT4 | difftest | The step-7 outcome difftest: t_slice widened to every step-7 entry and constructor, each side judged against truth, pin defects recorded in `pin_defects.rs`, work rows in `slice_work.txt` | BO11, MK4 (first rows); grows with each task | — | Sonnet |
-| BB1 | bench | Perf rows before and after each step-7 task: work counts against the pin with side-channel timers, no committed counters | DT4 | — | Sonnet |
-| MK4 | make | `revolve` of line and arc profiles, full and partial: plane, cylinder, cone, sphere, torus built directly with exact and `OnChart` pcurves, poles from segments on the axis, `Refused(CrossesAxis)`; `revolve_sheet` | SM1b for poles (built) | — | Opus |
+| BR11 | brep | Draft methods merging faces on one surface across an edge and edges on one curve at a free vertex, with a protected-edge set; called by the Boolean's build stage | — | — | Sonnet |
+| SF1 | surface | Curves projected along a direction and dropped along the normal onto a surface (`project_curves`, `drop_curves`): closed forms now (a line or circle onto a plane, a line onto a cylinder or cone along its axis), the fitter for the rest. Home: `scx-surface`, because the map is curve against surface with no view and no topology; the restriction to a face's trim is `scx-bodyq`'s existing curve-onto-body projection (01 row for bodyq). Not `scx-hlr`, whose projections are view-dependent visibility | general curves wait on the fitter | — | Opus |
+| DT4 | difftest | The step-7 outcome difftest: t_slice widened to every step-7 entry and constructor, each side judged against truth, pin defects in `pin_defects.rs`, work rows in `slice_work.txt` | BO11, MK4 (first rows); grows with each task | — | Sonnet |
+| BB1 | bench | The perf rows of §8.3 before and after each step-7 task: work counts against the pin with side-channel instrumentation, no committed counters | DT4 | — | Sonnet |
+| MK4 | make | `revolve` of line and arc profiles, full and partial: plane, cylinder, cone, sphere, torus built directly with exact and `OnChart` pcurves; segments on the axis and interior axis touches (WR-590, horn torus) become pole vertices; the plane snap rule; `Refused(CrossesAxis)` only for a true crossing; `revolve_sheet`; WR-590 ported as a build test | SM1b for poles (built) | — | Opus |
 | MK4b | make | `revolve` of other curves onto the procedural revolution kind | step 5 procedural kinds | — | Sonnet |
 | MK5 | make | `sweep` of a line-and-arc profile along a line-and-arc path: walls by kind, closed-form mitres, one Draft, no stitch; the planar path is this case | MK4 | make → ssi (mitre conics) | Opus |
-| MK6 | make | `screw` on the procedural sweep kind with a screw motion; exact cylinder for a profile line along the axis | step 5 procedural kinds | — | Opus |
+| MK6 | make | `screw` on the procedural sweep kind: the radial law (`O/sweep.rs:1824-1871`), `Walls::{Pieces, Joined}` (the app's `join_spline_walls`), an exact cylinder for a profile line along the axis | step 5 procedural kinds | — | Opus |
 | MK7a | make | `frames`: rotation-minimising frames in closed form on lines, arcs and helices, least rotation at corners; port the stations tests | — | — | Sonnet |
-| MK7b | make | `sweep` along a general path and the controlled sweep, on the procedural sweep kind | MK7a, step 5 procedural kinds | — | Opus |
+| MK7b | make | `sweep` along a general path and the controlled sweep on the procedural sweep kind, with `PathFrame`'s twist, end scale and one or two rails with `RailFit` (`A/sweep_path.rs:34-68`) | MK7a, step 5 procedural kinds | — | Opus |
 | MK8 | make | `sweep_solid`: the whole-body sweep from HL5's silhouettes and the cellular merge | HL5, BO12, MK7b | make → hlr, make → boolean | Opus |
-| MK9 | make | `pair`: section pairing by the cyclic least-cost alignment, exact optimum under the budget (Q5) | — | — | Opus |
+| MK9 | make | `pair`: section pairing by the cyclic least-cost alignment, exact within a fixed cell limit, else the banded answer marked `Unproven` (Q5) | — | — | Opus |
 | MK10 | make | `loft` with the certificate: skinning through the step-5 constructor, `span_bound` ported, local re-skin per added station, `Raise` on an unproved span | MK9, step 5 surface construction | — | Opus |
 | MK10b | make | Rails: one and two rails, the warp for three or more, the two-rail sweep; certified by MK10 | MK10 | — | Opus |
-| MK11 | surface, make | Coons (four exact boundaries, compatibility, certified deviation), Gordon, n-sided; `face` bounds them | knot insertion and degree elevation in `scx-nurbs-surface`; Gordon also MK10's constructor | — | Opus |
+| MK11 | surface, make | Coons (four exact boundaries, compatibility, certified deviation), Gordon, n-sided (its sheet built with shared sides known: no stitch); `face` bounds them; G1 joins certified or `Unproven` | knot insertion and degree elevation in `scx-nurbs-surface`; Gordon also MK10's constructor | — | Opus |
 | MK12 | make | `section_blend` with Hermite ends G0-G3 | step 5 surface construction | — | Sonnet |
 | MK12b | make | Sheets between sheets (`blend_edges`, `fillet_sheets`, `fillet_crossing`) | MK12, BO14, SM9 for NURBS sheets | — | Opus |
 | MK13 | make | `radial`: the hollow cone built directly (outer, inner, annular caps) with no stitch or subtract | — | — | Sonnet |
 | MK14 | make | `prism` and `sheet` over several planar regions; port `O/prism.rs` and `prism/tests.rs` truths | — | — | Sonnet |
-| MK15 | make | `face` on any surface by a uv bound or a planar region in uv; iso-line edges exact | — | — | Sonnet |
+| MK15 | make | `face` on an analytic surface by a uv box or a planar region in uv; iso-line edges exact (lines and circles) | — | — | Sonnet |
+| MK15b | make, nurbs-surface | `face` on a NURBS surface: iso-curve extraction in `scx-nurbs-surface` (exact, by knot insertion to full multiplicity; not built yet); bounds other than iso lines wait on step 5's curve-on-surface kind | MK15; knot insertion | — | Sonnet |
 | MK16 | make (tests) | The closed-form make table: the ops 26-case table, Pappus, cornered and stations truths, against T9 | MK4, MK5 | — | Sonnet |
-| DF1 | deform | Crate; `deform` with the exact image rules of §5.5 on analytic faces; `Refused(MeetsAxis)` | step 5 volume maps (the bend, twist and unbend maps only) | deform → surface, brep | Opus |
+| MK17 | make | `ruled` between two curves (lines and coplanar arcs exact by kind; others a degree-1 NURBS after compatibility) and `reverse` of a sheet as a Draft method (`O/surface.rs:340, :366`) | knot insertion and degree elevation (for NURBS curves) | — | Sonnet |
+| DF1 | deform | Crate; `deform` with the exact image rules of §5.5 on analytic faces; `Refused(MeetsAxis)` | step 5 volume maps (bend, twist and unbend only) | deform → surface, brep | Opus |
 | DF2 | deform | Faces with no exact image onto the in-volume procedural kind | DF1, step 5 procedural kinds | — | Sonnet |
 | DF3 | deform (tests) | Jacobian volume closed forms, bend ∘ unbend = identity, derivatives against finite differences in exact arithmetic, the pin's map tests | DF1 | — | Sonnet |
-| RP1 | repair | Crate; `repair` with items per defect; short-edge clusters and squeezes on lines and planes exactly | SU6 (built) | repair → surface, brep, check (findings) | Opus |
-| RP2 | repair | B-spline ends: enclosures, control-point moves, GAP_SHARE certified on SU6; zero-length piece cutting | RP1 | — | Opus |
+| RP0 | difftest | Count, over the corpus's untrusted records, what the SMLib healer (`heal_made`, `K/topology/brep/p10.rs:546`, from `solidcore-convert/src/brep.rs:317`) changes: records it alters, by defect class, and how many then pass the check that failed before. Its result decides Q7 finally | — | — | Sonnet |
+| RP1 | repair | Crate; `heal` with items per defect; short-edge clusters and squeezes on lines and planes exactly | SU6 (built) | repair → surface, brep, check (findings) | Opus |
+| RP2 | repair | B-spline ends: interval enclosures (`scx-nurbs`'s `eval_over`, built), control-point moves, GAP_SHARE certified on SU6; zero-length piece cutting | RP1 | — | Opus |
 | RP3 | repair | Sliver collapse by certified coincidence | RP1 | — | Opus |
 | RP4 | repair (tests) | Port the 18 ops heal tests as truths; one-defect recipes at δ = 10·acc, acc, acc/10 | RP1-RP3 | — | Sonnet |
+| RP5 | repair | `sew` within a gap over `scx-stitch`: the kept edge's accuracy is the certified gap, recorded; `TooFar` past it | RP1 | repair → stitch | Opus |
+| RP6 | repair | `patch_holes`: plane faces exactly; otherwise MK11's patch meeting the neighbours G1, `Unproven` where uncertified; sewn in by RP5 | RP5, MK11 | repair → make | Opus |
+| RP7 | repair | `rebuild_analytic`: a NURBS face proved to be a cylinder, cone, sphere or torus goes as that surface; refuted or undecided faces listed and kept | RP1, MK10's certificate module (portable before the loft) | — | Opus |
+| RP8 | repair | `repair(&[Step])`: the steps in order, `Changes` composed, `Skip` mode across steps; the app's Repair Part as a step list | RP1, RP5 (RP6, RP7 as they land) | — | Sonnet |
 
 ### 7.1 Graph and critical path
 
 ```
 LY2 (first: before DF1 and RP1 create crates)
-BO10 ──┬─> BO11 ──> DT4 ──> BB1
-       ├─> BO20
-       └─> BO12 (with BO25) ──┬─> BO15
-                              ├─> BO16
-                              └─> MK8 (HL5, MK7b)
+BO10 ──> BO10b ──┬─> BO11 ──> DT4 ──> BB1
+                 ├─> BO20
+                 └─> BO12 (with BO25) ──┬─> BO15 ──> BO15b
+                                        ├─> BO16 ──┐
+                                        └─> MK8 (HL5, MK7b)
+BO13 ──> BO13b ──────────────────────────────────┴─> BO16b <── SF1
 BO25 ──> BO14 ──> MK12b
-BO13, BO17, BO18, BO21 alone;  BO21 ──> BO22 (tracing: SM6b);  BW3 ──> BO19
+BO17, BO18, BO21, BR11 alone;  BO21 ──> BO22 (tracing: SM6b);  BW3 ──> BO19
 BO23 (SM9, fitter, NURBS ray);  BO24 (fitter)
 MK4 ──┬─> MK5 ──> MK16
       └─> MK4b (procedural kinds)
 MK7a ──> MK7b (procedural kinds) ──> MK8;  MK6 (procedural kinds)
 MK9 ──> MK10 (surface construction) ──> MK10b;  MK11, MK12 (surface construction) ──> MK12b
-MK13, MK14, MK15 alone
+MK13, MK14, MK15 alone;  MK15 ──> MK15b;  MK17 (knot insertion)
 DF1 (volume maps) ──┬─> DF2 (procedural kinds)
                     └─> DF3
+RP0 alone (decides Q7)
 RP1 ──┬─> RP2 ──┐
-      └─> RP3 ──┴─> RP4
+      ├─> RP3 ──┴─> RP4
+      ├─> RP5 ──> RP6 (MK11)
+      ├─> RP7 (MK10's certificate module)
+      └─> RP8 (with RP5)
 ```
 
-- **Can start now:** LY2, BO10, BO13, BO17, BO18, BO21, BO25, MK4, MK7a, MK9, MK13, MK14, MK15, RP1.
-- **Startable once a step-7 or step-6 row lands:** BO11, BO12, BO14 to BO16, BO19 (BW3), BO20,
-  BO22's stated and closed-form halves, DT4, BB1, MK5, MK16, RP2 to RP4.
+- **Can start now (17 rows, plus a module):** LY2, BO10, BO13, BO17, BO18, BO21, BO25, BR11, SF1 (closed forms), MK4,
+  MK7a, MK9, MK13, MK14, MK15, RP0, RP1, and MK10's certificate module on its own (for RP7).
+  Checked against main: BO18's wire body exists (`scx-brep` shells list wire edges); MK15 is
+  narrowed to analytic surfaces, because iso extraction on NURBS surfaces is not in
+  `scx-nurbs-surface` yet (MK15b); RP2's B-spline enclosures exist (`scx-nurbs/src/eval_over.rs`)
+  and SU6's gaps exist (`scx-surface/src/gap.rs`), so RP2 is ready once RP1 lands.
+- **Startable once a step-7 or step-6 row lands:** BO10b, BO11, BO12, BO13b, BO14 to BO16b, BO19
+  (BW3), BO20, BO22's stated and closed-form halves, DT4, BB1, MK5, MK16, RP2 to RP5, RP8.
 - **Waits on step 5:**
   - BO23 on SM9, the pcurve fitter and step 5's ray against NURBS;
-  - BO24 on the fitter; BO22's tracing on SM6b;
+  - BO24, SF1's general curves and BO13b's general curves on the fitter; BO22's tracing on SM6b;
   - MK4b, MK6, MK7b and DF2 on the procedural kinds;
-  - MK10, MK10b, MK12 on step 5's surface construction (interpolation and skinning); MK11 on knot
-    insertion and degree elevation;
+  - MK10, MK10b, MK12 on step 5's surface construction; MK11, MK15b and MK17 (NURBS curves) on
+    knot insertion and degree elevation; RP6 on MK11;
   - DF1 on the volume maps.
 - **Waits on step 6:** BO19 on BW3; MK8 on HL5.
-- **The critical path to "done when"** is BO10 → BO12 (with BO25) → BO15 and BO16, with DT4 growing
-  beside it. BO10 can fail on main today, and every failure it finds is a bug to fix before BO12
-  builds on the pipeline. The NURBS Boolean (BO23) is outside the analytic gate, as in step 4.
+- **The critical path to "done when"** is BO10 → BO10b → BO12 (with BO25) → BO15 and BO16, with
+  DT4 growing beside it. BO10 can fail on main today; BO10b fixes what it finds before BO12 builds
+  on the pipeline. The NURBS Boolean (BO23) is outside the analytic gate, as in step 4.
 - **Step-8 families that can start early:**
   - `scx-mesh` (mesh to body; make, tess, mass): now, on MK3 and MK14.
-  - `scx-sheetmetal` (develop, fold): once MK4 lands. The pin's develop uses its own rigid maps
-    (`fold.rs:75, :412`), so it waits on no deform row; bends are cylinders.
+  - `scx-sheetmetal` (develop, fold): once MK4 lands. The pin's develop uses its own maps
+    (`K/develop/fold.rs:60-90, :412`), so it waits on no deform row; bends are cylinders.
   - `scx-taper` (draft walls, the pin's `taper.rs` and `taper_walls.rs` for line and arc profiles,
     which are exact): once MK5 and BO12 land; offsets of non-planar walls wait on step 5's offset
     kind.
-  - `scx-local` (move and contract faces): once BO12 and BO25 land.
+  - `scx-local` (move, replace and delete faces with heal; the defeature removals `remove_faces`,
+    `remove_feature_with_crossing_patches`, `remove_round_junction`, `remove_ring_groove`;
+    `A/delete_face.rs`): once BO12, BO25 and BR11 land.
+
+### 7.2 Amendments to 01 in this branch
+
+LY2's design changes four rows of 01's crate table (`docs/01-architecture.md`), amended in this
+branch:
+
+- `scx-boolean` (row at :100): depends on bodyq, ssi, mass; the stitch edge is dropped (Q2).
+- `scx-deform` (:102): the bend, twist and unbend maps (no B-spline volume, Q6); depends on brep and
+  surface; no stitch (topology is unchanged) and no check (the result contract runs outside).
+- `scx-make` (:103): adds ssi (MK5's mitre conics).
+- `scx-repair` (:104): the certified heal, sew within a gap, hole patches and analytic rebuild, none
+  needing Booleans; depends on stitch, check, make and surface (n-sided patches); the boolean edge
+  is dropped. 01 placed it at layer 8 for Booleans it does not need; it stays at layer 8 because
+  RP6 depends on make.
 
 ## 8. Truth tests per task
 
@@ -896,8 +1084,9 @@ and the same count of shells and regions.
 | Property | Statement | Notes |
 |---|---|---|
 | Commutativity | A ∪ B ≡ B ∪ A, A ∩ B ≡ B ∩ A | ids differ (`a`'s are kept); not compared |
+| Shared-edge collars | for coaxial collars that meet along a shared circular edge or overlap over a length ℓ: A ∪ B ≡ B ∪ A, and vol(A ∪ B) = vol(A) + vol(B) − πr²ℓ, in both operand orders | the radial order at the shared edge, which the pin retries for (R2); the #20408 test (`tests/boolean.rs:50-75`) is mandatory: as a testkit recipe of its geometry now, and its own two records through DT4 once they can be read |
 | Idempotence | A ∪ A ≡ A, A ∩ A ≡ A, for A and a translated copy A′ = A (two bodies) | the pipeline path, not BO20's shortcut |
-| Self difference | A − A′ = ∅ | the pin's `boolean_api.rs:483` |
+| Self difference | A − A′ = ∅ | the pin's `boolean_api.rs:483`; also the empty-result refutation |
 | Absorption | A ∪ (A ∩ B) ≡ A, A ∩ (A ∪ B) ≡ A | |
 | Partition | vol(A − B) + vol(A ∩ B) = vol(A); (A − B) ∪ (A ∩ B) ≡ A | |
 | Inclusion-exclusion | vol(A ∪ B) = vol(A) + vol(B) − vol(A ∩ B) | the pin's `tests/boolean.rs:3585` |
@@ -909,17 +1098,19 @@ and the same count of shells and regions.
 | Determinism | every result encoded by `scx-record` is bit-identical over two runs | |
 
 A property is asserted only where every Boolean it uses is built. A pair where one side is built and
-another is `Unsupported` is counted and printed, so the suite measures coverage as well.
+another is `Unsupported` is counted and printed, so the suite measures coverage as well. The
+collars and #20408 are the exception: they must pass before BO10b closes.
 
 ### 8.2 Per task
 
 | Task | Truths | Pin tests to port |
 |---|---|---|
-| BO11, BO12 | §8.1 n-ary order; closed-form volumes of unions of k boxes and k cylinders; cells counted against the arrangement of the operands (a closed form for boxes) | `O/boolean.rs:477, :489, :503`; `tests/boolean.rs:2948, :2990, :500` |
-| BO13 | the target's volume unchanged; section edges lie on both operands (certified gap); faces split into the closed-form count for a box imprinted by a cylinder | `wr_619_imprint_skips_collapsed_definition` (assertions on outcome only) |
-| BO14 | section areas in closed form: plane through a sphere, cylinder, torus, box; the section's boundary on both surfaces | `planar_section.rs` tests that assert curves |
-| BO15 | vol(front) + vol(back) = vol(body); each side's classification by the half-space oracle | `tests/boolean.rs:3528`; split tests asserting volumes |
-| BO16 | the kept sheet's area in closed form | `tests/trim.rs:371`, `:627` |
+| BO10b | every BO10 failure fixed or filed with a typed cause; an empty result with a witness vertex is `Defect(EmptyRefuted)` on a recipe built to provoke it | `O/boolean.rs` refutation tests; `boolean_api.rs:483, :509` |
+| BO11, BO12 | §8.1 n-ary order; closed-form volumes of unions of k boxes and k cylinders; cells counted against the arrangement of the operands (a closed form for boxes); the collars in every operand order | `O/boolean.rs:477, :489, :503`; `tests/boolean.rs:2948, :2990, :500, :50` |
+| BO13, BO13b | the target's volume unchanged; section edges lie on both operands (certified gap); faces split into the closed-form count for a box imprinted by a cylinder; regions bounded by curves have their closed-form areas | `wr_619_imprint_skips_collapsed_definition` (outcome only); `split_face_by_curves` tests asserting areas |
+| BO14 | section areas in closed form: plane through a sphere, cylinder, torus, box; the section's boundary on both surfaces | `planar_section.rs` tests that assert curves; `face_section` tests |
+| BO15, BO15b | vol(front) + vol(back) = vol(body); each side's classification by the half-space oracle; a short tool refused | `tests/boolean.rs:3528`; split tests asserting volumes; `ToolStopsShort` tests |
+| BO16, BO16b | the kept regions' areas in closed form; a pick on the cut refused | `tests/trim.rs:371`, `:627`; `trim_by_dropped_curves` tests asserting areas |
 | BO17 | 2-D areas by the shoelace and arc segment formula, in exact rationals where the inputs are | `boolean2d` tests asserting areas |
 | BO18 | intersection curves of box and cylinder, sphere and sphere, plane and torus in closed form | `intersect_faces_read_only` (9) |
 | BO19 | gap and depth brackets contain the closed-form distance and penetration of spheres, boxes | — |
@@ -927,18 +1118,52 @@ another is `Unsupported` is counted and printed, so the suite measures coverage 
 | BO22 | tangent sphere-in-cylinder, cylinder-on-plane: closed-form volumes; the contact curve on both | `tests/boolean.rs` tangent cases, `curved_sliver_coincidence` |
 | BO23 | the 73 §9 NURBS truths (SM0) as Boolean volumes | BO5's tests turn into results (SM9) |
 | BO25 | a section sheet's area; laminas counted against the closed form | — |
-| MK4 | Pappus: volume 2π·x̄·A and area 2π·x̄·L per profile; a full sphere, torus and frustum; poles valid by the contract | ops table :298, :302; `wr_590` (as a refusal plus the split recipe); `api_brep.rs:1735`; `issue_2905:158` |
+| BR11 | merged faces' area equals the sum; protected edges survive; the contract passes | `A/heal.rs` tests asserting outcome |
+| SF1 | a circle projected onto a plane along a direction is the closed-form ellipse; a line dropped onto a cylinder along its axis is a line | `project_curves`, `drop_curves` tests asserting geometry |
+| MK4 | Pappus: volume 2π·x̄·A and area 2π·x̄·L per profile; a full sphere, torus, horn torus and frustum; poles valid by the contract; a true crossing refused | ops table :298, :302; `wr_590` (a build test: three faces and the Pappus volume); `api_brep.rs:1735`; `issue_2905:158` |
 | MK5 | area × length on straight runs, Pappus on arcs, the mitre's exact conic | `sweep_cornered.rs:112, :178, :363`; ops table :307, :320, :343 |
-| MK6 | Pappus for a square thread, the wall exactly on the screw surface | `screw_sweep.rs:271`; ops table :474, :492 |
+| MK6 | Pappus for a square thread, the wall exactly on the screw surface; a law's offsets at its turns | `screw_sweep.rs:271`; ops table :474, :492 |
 | MK7a | torsion of a helix frame, identity on lines, rotation on arcs, to 1e-12 | `sweep_stations.rs:74, :505` |
-| MK9 | the optimum against a brute-force search on small sections; pairing invariant under rotation of the start vertex | `fork_ea59e9c_section_orders` (23) as outcomes |
+| MK7b | a twisted square prism's volume (twist preserves area); an end scale s gives the frustum volume; rails as MK10b | the app's `sweep_path.rs` tests asserting volumes |
+| MK9 | the optimum against a brute-force search on small sections; pairing invariant under rotation of the start vertex; a banded answer that avoids its band edge reported as proven | `fork_ea59e9c_section_orders` (23) as outcomes |
 | MK10 | the cylinder through stacked circles; the frustum on a straight rail; the certificate's bound above an exact sample on every span | ops `sweep.rs:1359, :1334, :1398`; `loft_rails.rs:147`; `certificate.rs:1658, :1678` |
 | MK11 | the bilinear patch of four lines; a sphere octant from three arcs; a flat pentagon | `gordon.rs:866`; `O/surface.rs:543, :668`; `n_sided.rs:276` |
 | MK12 | two G0 sections give the ruled surface; quadratic sections give the quadratic | `section_blend.rs:47, :132` |
 | MK13 | hollow cone volume in closed form | `local_operation.rs` radial tests asserting volume |
-| MK14, MK15 | area and volume per region; iso edges on the surface exactly | `prism/tests.rs` (73) where they assert quantities; `O/../tests/prism.rs` (35) likewise |
+| MK14, MK15, MK15b | area and volume per region; iso edges on the surface exactly | `prism/tests.rs` (73) where they assert quantities; `O/../tests/prism.rs` (35) likewise |
+| MK17 | the ruled surface between two parallel lines is the plane strip of closed-form area; reversing twice is the identity | `ruled`, `reverse_sheet` tests asserting outcome |
 | DF1, DF3 | the bent block's volume ∫ (u/d) dV in closed form; bend ∘ unbend = identity on points to a stated bound; plane cases exact by construction | `bend:1567, :1580`; `twist:1078, :1089`; `unbend:1488, :1500`; `p1:2660, :2918, :3053`; `bend:1775` |
+| RP0 | none: a count, printed and recorded | — |
 | RP1-RP4 | the check passes; no accuracy grew; `|ΔV| ≤ area × largest bound`; counts in closed form | all 18 of `O/../tests/heal.rs` except `:1402` (Q7) |
+| RP5 | a box with one face moved off by δ < gap sews to a solid whose volume is within area × δ; each sewn edge's recorded accuracy contains the closed-form gap; δ > gap is `TooFar` | the app's `repair.rs` tests asserting outcome |
+| RP6 | a box less one face patched back: the exact volume; a cylinder's missing cap patched planar; a curved hole's patch with its G1 bound recorded | `A/fill.rs` and `fill_general_tests.rs` tests asserting areas or continuity |
+| RP7 | a NURBS cylinder, cone, sphere and torus rebuilt as the analytic surface; a perturbed one refuted and kept | the app's repair rebuild tests |
+| RP8 | the step list in order equals the entries composed by hand, bit for bit | — |
+
+### 8.3 Work counts for Q5 and R2 on large and hard inputs
+
+The perf rule asks for before and after counts of added work. Two rulings add work in some cases;
+BB1 measures them, with side-channel instrumentation in local runs (no committed counters), and
+reports each as a table against the pin.
+
+- **R2 (no union retry).** What is measured: per union, the work units charged (`Report.work`) and
+  wall time in scx, against the pin's total for the same union including every attempt
+  `union_copies` makes, the operand copies, the witness copy, and `matched_tolerances`' trial copy
+  and Level2 check (counted by wrapping those calls in the bench harness, not in the pin's code).
+  Inputs: DT4's Boolean recipes; the #20408 collars and BO10's collar recipes in both orders (the
+  cases that take the pin's retry); and the largest corpus unions. The expected result is less
+  work in scx on every case the pin retries, because scx runs once. The risk measured is the cost
+  of BO12's geometry-only radial ordering at shared edges (sorting faces about an edge by exact
+  tangent comparison, then curvature where tangents agree): counted as comparisons per shared
+  edge, with the worst case on the collars. A rise above 10% against the slice's baseline on
+  recipes with no shared edges fails, as the t_slice work rule does.
+- **Q5 (exact pairing within a fixed limit, then banded).** What is measured: cells visited per
+  section pair, by the exact search and by the band, against the pin's count on the same sections;
+  and how many corpus lofts reach the band at all. Inputs: every loft in the corpus, plus generated
+  section pairs of 10, 100, 1,000 and 2,000 vertices. The exact search costs O(mn log n) cells; the
+  pin's MAX_CELLS of 4e6 (`loft_sections.rs:80`) is kept as the fixed limit so the branch taken is
+  the pin's, and scx's added work is the band's proof check (whether the walk touches the band's
+  edge), linear in the walk. BB1 records the cell counts before MK9 (the pin) and after.
 
 ## 9. Open questions
 
@@ -947,7 +1172,8 @@ maps or the ray against NURBS. Who writes them?**
 
 - Recommend: the coordinator asks for one step-5 widening note (like 73 for the SSI) that gives
   these five their rows before step 7's waiting tasks are briefed. Step 7's tasks cite them by
-  name until then. Fourteen of this note's 45 rows can start now and 15 more wait only on other step-6 or step-7 rows.
+  name until then. Seventeen of this note's 56 rows (and MK10's certificate module) can start now,
+  and about 20 more wait only on other step-6 or step-7 rows.
 - Against: a planning note for five large pieces delays them by a review cycle. Mitigation: the
   analytic step-7 rows (§7.1, "can start now") keep builders busy for that cycle.
 
@@ -959,16 +1185,23 @@ maps or the ray against NURBS. Who writes them?**
   replaced by known topology (BO17, MK5). LY2 removes the edge from 01's table.
 - Against: some later entry (trimming sheets that only nearly meet) may want to sew. Mitigation:
   such a case is two operations at the caller's level (stitch, then Boolean), and the Boolean
-  stays lower.
+  stays lower. `scx-repair` does keep its edge to `scx-stitch` (RP5's sew), and adds one to
+  `scx-make` for RP6's patches (§7.2).
 
-**Q3. A revolve profile that crosses the axis: refuse, or split it as the pin does (WR-590)?**
+**Q3. A revolve profile that touches or crosses the axis.**
 
-- Recommend: refuse with `Refused(CrossesAxis { at })`. Split, the input asks for the union of two
-  revolved halves, which is a different solid from the one the profile describes (the pin's test
-  shows three faces and the Pappus volume of the split).
-- Against: users draw profiles across the axis to mean "the half on one side", and the pin's
-  behaviour is what SolidCraft users know. Mitigation: the remedy is data (`ChangeInput` naming the
-  crossing), so the app can offer the split; DT4 records the outcome difference as by design.
+- What the pin does (READ): WR-590 is an interior touch: the profile meets the axis at one point
+  inside it and leaves on the same side, so the revolve is a horn torus pinched at a pole. The pin
+  splits the profile at the touch (`PC/p3/sweeps.rs:181-194`) and builds both halves, giving three
+  faces and the Pappus volume. A true crossing, where the profile passes to the other side, is
+  refused (`K/sweep/rotational_sweep_geometry.rs:364`).
+- Recommend: the same split by meaning. MK4 makes an interior touch a pole vertex shared by the
+  faces on either side of it (no split into two bodies: one solid with a pole, which `scx-brep`
+  holds), and refuses only a true crossing with `Refused(CrossesAxis { at })`. WR-590 is ported as a
+  build test: three faces, the Pappus volume, the contract passing.
+- Against: a touch the input states only to within coincidence may be a crossing by a hair.
+  Mitigation: the decision is the sign of the profile's distance from the axis on each side of the
+  touch, decided by certified bounds; a touch that cannot be decided is `Unproven`, never guessed.
 
 **Q4. N-ary Booleans: a fold now and the cellular merge later, or only the cellular merge?**
 
@@ -981,12 +1214,16 @@ maps or the ray against NURBS. Who writes them?**
 **Q5. Loft pairing: the pin falls back to a banded walk past 4e6 cells, which may miss the optimum.
 Keep it?**
 
-- Recommend: no banded fallback. The exact optimum is computed under the operation's budget, and
-  running out is `Exhausted`. A change in the answer when the input grows past a cell count breaks
-  "truth over pin" and determinism under different caps.
-- Against: large sections (hundreds of vertices each) become `Exhausted` where the pin gives a
-  good-enough answer. Mitigation: the divide-and-conquer search is O(n² log n) per section pair;
-  4e6 cells is 2,000 by 2,000 vertices, far past CAD profiles; BB1 measures the worst corpus case.
+- Recommend: keep both, with the answer's status stated. The exact search runs up to a fixed
+  per-operation cell limit (the pin's 4e6, a constant of the operation, not the remaining budget,
+  so the branch taken is a function of the input alone, R6). Past it, the banded answer
+  (`loft_sections.rs:1161-1336`) is returned with its bound: `Proven` when its walk does not run
+  along the band's edge (the pin's own test that the band held the optimum), otherwise `Unproven`,
+  with its cost as an upper bound on the optimum. Not `Exhausted`: an answer exists and is good.
+  It is deterministic because the band is computed from the input.
+- Against: an `Unproven` pairing may be worse than the optimum, and callers must handle the status.
+  Mitigation: 4e6 cells is 2,000 by 2,000 vertices, far past CAD profiles; §8.3 counts how many
+  corpus lofts reach the band at all.
 
 **Q6. Is `scx-deform` in step 7 at all?**
 
@@ -1003,8 +1240,9 @@ Keep it?**
   (R10), and is reached only from untrusted record conversion. Its useful parts are queries that
   SU6 and `scx-check` already do, and its seam fixes are `finish`'s and stitch's jobs.
 - Against: some imported records may need its fixes to become valid, and the converter
-  (`scx-import-sc`) may then refuse designs the pin opens. Mitigation: the converter's corpus run
-  counts such refusals; each becomes a typed repair item (RP rows) if real.
+  (`scx-import-sc`) may then refuse designs the pin opens. Mitigation: RP0 counts, before this is
+  final, how many corpus records `heal_made` changes and how many of those then pass the check;
+  each class it really fixes becomes a typed repair item (RP rows), certified.
 
 **Q8. Repair keeps the pin's run-time "check before and after, keep if better" gate?**
 
@@ -1023,15 +1261,20 @@ Keep it?**
 - Against: the certificate costs a degree-(2p−1)·(2q−1) Bernstein form per patch. Mitigation: it is
   computed once per construction, and it replaces a grid that can miss folds.
 
-**Q10. The revolve's analytic candidates: is a cone whose height is below the pin's MIN_HEIGHT
-(#17085) refused?**
+**Q10. The revolve's analytic candidates: what of a cone whose height is below the pin's
+MIN_HEIGHT (#17085)?**
 
-- Recommend: no fixed floor. A cone wall whose ends are within the coincidence of each other is a
-  flat annulus by construction (the profile segment is perpendicular to the axis within
-  coincidence, which `scx-planar` snaps), so it is a plane. Any longer segment is a valid cone.
+- What the pin does (READ): it does not refuse. Below the floor, or when any analytic construction
+  fails, the candidate is dropped and the face keeps its revolution surface or B-spline
+  (`K/sweep/analytic_revolution.rs:26-30, :333`).
+- Recommend: no fixed floor, and every line or arc profile gets its analytic surface. The plane snap
+  rule (§3.6): a profile line whose two ends lie at axial heights within the coincidence
+  (max(res, acc₁, acc₂)) of each other revolves to a plane normal to the axis at the start
+  vertex's height; the end vertex's measured distance from that plane is recorded as its accuracy.
+  Any other line is a cylinder (both ends at one radius within coincidence) or a cone, however
+  low.
 - Against: a near-flat cone is ill-conditioned for later SSI. Mitigation: SM2 and SM4 handle it by
-  certified bounds; a conditioning warning is recorded, never a refusal (11-26: never refuse valid
-  input).
+  certified bounds; a conditioning warning is recorded, never a refusal or a fallback surface.
 
 ## 10. Against this plan
 
@@ -1046,8 +1289,9 @@ Keep it?**
   Against that: the slice already classifies by connected piece sets with membership, so BO12 is a
   generalisation of stage 6's labels from two operands to n, and the slice's tests are its first
   oracle.
-- **Refusing what the pin builds** (Q3, Q5, Q10) moves difftest outcomes. Each is recorded in DT4 as
-  a by-design difference with its reason, never as a pin defect.
+- **Differing from the pin where it is not truth** (Q3's single solid with a pole, Q5's status on
+  the banded answer, Q10's cone where the pin keeps a B-spline) moves difftest outcomes. Each is
+  recorded in DT4 as a by-design difference with its reason, never as a pin defect.
 - **No sampling anywhere is ambitious.** R10 replaces every sampled acceptance with a proof. Where a
   proof is not yet available (G1 on n-sided patches, which the pin also does not certify), the
   answer is `Unproven` with its bound, which callers must handle.
@@ -1055,18 +1299,18 @@ Keep it?**
   lines. Mitigation: modules per construction, and the geometry (Coons, Gordon, n-sided, the volume
   maps) lives in `scx-surface`, so `scx-make` holds topology only.
 
-## 11. Proposed 04 rows (for the coordinator's ruling and Brett's review)
+## 11. Proposed 04 rows (ruled by the coordinator, for Brett's review)
 
 | date | status | decision | why/against | ref |
 |---|---|---|---|---|
-| 11-28 | proposed | **Step 7 plan.** `scx-boolean`'s entries (`boolean`, `boolean_all`, `merge`/`select`, `imprint`, `split`, `section`, `trim`, `planar`, `intersect`, `interference`, `boolean_with`) are one pipeline (R1), take `&Brep` and return `Done<C>` (`interference` returns a decided `Interference`); no retry, operand swap or rebuild (R2); no tolerance ladder (R3). Tasks: 75 §7 | The pin's modes and retries are the hazards; one pipeline means one set of proofs. Against: entries with different needs (2-D Boolean) may be faster alone; BB1 measures | 75 §1.2, §2.6 |
-| 11-28 | proposed | **Make builds exactly.** Constructors build the analytic kind directly where one exists (R4); otherwise the step-5 procedural kind; NURBS only where the operation is a fit, with a certificate. Choice by a predicate on the input before building (R5). `Made<R>` with typed face records replaces out-params (R7); no `cap: bool` or integer cap modes; no stitch in constructors | Removes build-then-recognise sampling and its fallbacks. Against: more code paths than one general sweep; each is small and closed-form tested | 75 §3.6, §4.6 |
-| 11-28 | proposed | **Revolve refuses a profile crossing the axis** (`Refused(CrossesAxis)`, remedy `ChangeInput`); segments on the axis become pole vertices; no MIN_HEIGHT floor | The split the pin does builds another solid. Against: users expect the split; the app can offer it from the remedy | 75 §3.6, Q3, Q10 |
-| 11-28 | proposed | **Loft pairing is exact under the budget**, with no banded fallback; certificates have a fixed per-operation budget and record `Raise` on an unproved span, never `RailPastStationCap` | Determinism and truth over pin. Against: very large sections may exhaust; BB1 measures | 75 §4.6, Q5 |
-| 11-28 | proposed | **Repair ports only the certified healer** (`tolerance_defects`), with items per defect and `Skip` mode; no run-time check-compare gate; the SMLib healer is not ported; no tolerance grows | The SMLib healer widens tolerances; certified edits make the gate redundant. Against: imported records may need SMLib fixes; the converter's corpus run counts them | 75 §6.5, Q7, Q8 |
-| 11-28 | proposed | **Deform is narrow in step 7**: bend, twist and unbend maps (geometry in `scx-surface`), `scx_deform::deform` with exact images decided by kind and frame and the procedural in-volume kind otherwise; no B-spline volume | The pin has no body deform and a stub B-spline volume. Against: no caller; it is last in priority and may move to step 8 | 75 §5.5, Q6 |
-| 11-28 | proposed | **Layers (LY2).** `scx-deform` after `scx-hlr`; `scx-repair` after `scx-make`; no `scx-boolean` → `scx-stitch` edge (01 corrected); new edges: `scx-make` → `scx-ssi`, `scx-hlr`, `scx-boolean`; `scx-repair` → `scx-check`; `scx-deform` → `scx-surface` | Matches layers.txt as it stands and the built slice. Against: a later Boolean entry may want to sew; it composes at the caller | 75 §7, Q2 |
-| 11-28 | proposed | **The Boolean algebra suite (BO10) is the step-7 gate's property half**: the §8.1 properties on every built pair and triple, judged by volume, area, the T10 oracle, the contract and run-twice bits | The pin has one commutativity check; properties catch what recipes miss. Against: it will fail widely at first; failures are issues, not blockers to BO12 | 75 §8.1 |
+| 11-28 | Ruled 11-28 (coordinator), for review | **Step 7 plan.** `scx-boolean`'s entries (`boolean`, `boolean_all`, `merge`/`select`, `imprint`, `imprint_curves`, `split`, `split_faces`, `section`, `trim`, `planar`, `intersect`, `interference`, `boolean_given`) are one pipeline (R1), take `&Brep` and return `Done<C>` (`interference` returns a decided `Interference`); proof is the default of `boolean`, not a mode, and an empty result with a witness inside is `Defect(EmptyRefuted)` (a ported postcondition); no retry, operand swap or rebuild (R2: the pin's one retry is `union_copies`, which every app union goes through; BO12's geometry-only radial order at shared edges replaces it, and the #20408 collars are a mandatory truth); no tolerance ladder (R3). BO10b fixes what BO10 finds before BO12; BO13 runs before BO12, rework accepted. Face and edge merge are `scx-brep` Draft methods (BR11). Tasks: 75 §7 | The pin's modes and retries are the hazards; one pipeline means one set of proofs. Against: entries with different needs (2-D Boolean) may be faster alone; and the retry hides an order dependence BO12 must remove; BB1 measures both (75 §8.3) | 75 §1.2, §2.6, §8.3 |
+| 11-28 | Ruled 11-28 (coordinator), for review | **Make builds exactly.** Constructors build the analytic kind directly where one exists (R4); otherwise the step-5 procedural kind; NURBS only where the operation is a fit, with a certificate. Choice by a predicate on the input before building (R5). `Made<R>` with typed face records replaces out-params (R7); no `cap: bool` or integer cap modes; no stitch in constructors, including n-sided patches (shared sides known). Added: `ruled` and `reverse` (MK17), the screw's radial law and joined walls (MK6), the sweep's twist, end scale and rails (MK7b), `face` on analytic surfaces now and NURBS after iso extraction (MK15, MK15b) | Removes build-then-recognise sampling and its fallbacks. Against: more code paths than one general sweep; each is small and closed-form tested | 75 §3.6, §4.6 |
+| 11-28 | Ruled 11-28 (coordinator), for review | **Revolve splits at an interior axis touch and refuses only a true crossing.** A touch (WR-590, a horn torus) becomes a pole vertex in one solid; a crossing is `Refused(CrossesAxis)`, remedy `ChangeInput`; segments on the axis become pole vertices; WR-590 is a build test. No MIN_HEIGHT floor: the plane snap rule makes a segment perpendicular to the axis within coincidence a plane, every other segment a cone; the pin's kept revolution surface or B-spline is not ported | Matches the pin's meaning (it splits a touch and refuses a crossing) with exact surfaces. Against: a touch within coincidence of a crossing; decided by certified bounds or `Unproven` | 75 §3.6, Q3, Q10 |
+| 11-28 | Ruled 11-28 (coordinator), for review | **Loft pairing is exact within a fixed per-operation cell limit, then banded with its status**: past the limit the banded answer is returned, `Proven` if its walk avoids the band's edge, else `Unproven` with its cost as the bound (never `Exhausted`); deterministic since the band is a function of the input. Certificates have a fixed per-operation budget and record `Raise` on an unproved span, never `RailPastStationCap` | Keeps the pin's good answer on large sections and states what is proved. Against: callers must handle `Unproven`; 75 §8.3 counts how many corpus lofts reach the band | 75 §4.6, Q5, §8.3 |
+| 11-28 | Ruled 11-28 (coordinator), for review | **Repair is a list of certified steps.** Separate entries `heal` (the certified healer, items per defect, `Skip` mode, no accuracy grows), `rebuild_analytic` (only where a certificate proves the analytic surface), `sew` within a gap over `scx-stitch` (each sewn edge's accuracy is its certified gap, recorded; the pin's 2× factor not ported) and `patch_holes` (plane exact; else MK11's patch G1, `Unproven` where uncertified), and `repair(&[Step])` for the app's Repair Part, replacing `RepairOptions`' bools. No run-time check-compare gate; no global `set_heals_tolerance_defects`. The SMLib healer is not ported unless RP0's count of what `heal_made` fixes on the corpus shows a class worth a certified item | Certified edits make the gate redundant; steps make the options data. Against: imported records may need SMLib fixes; RP0 counts them first | 75 §6.5, Q7, Q8 |
+| 11-28 | Ruled 11-28 (coordinator), for review | **Deform is narrow in step 7**: bend, twist and unbend maps (geometry in `scx-surface`), `scx_deform::deform` with exact images decided by kind and frame and the procedural in-volume kind otherwise; no B-spline volume; depends on brep and surface only. Supersedes 01's `scx-deform` row (01:102), amended in this branch | The pin has no body deform and a stub B-spline volume. Against: no caller; it is last in priority and may move to step 8 | 75 §5.5, Q6, §7.2 |
+| 11-28 | Ruled 11-28 (coordinator), for review | **Layers (LY2).** `scx-deform` after `scx-hlr`; `scx-repair` after `scx-make`; no `scx-boolean` → `scx-stitch` edge; new edges: `scx-make` → `scx-ssi`, `scx-hlr`, `scx-boolean`; `scx-repair` → `scx-stitch`, `scx-check`, `scx-make`, `scx-surface` (no `scx-boolean`); `scx-deform` → `scx-brep`, `scx-surface`. 01's rows for boolean, deform, make and repair (01:100-104) are amended in the same branch | Matches layers.txt as it stands and the built slice. Against: a later Boolean entry may want to sew; it composes at the caller | 75 §7, §7.2, Q2 |
+| 11-28 | Ruled 11-28 (coordinator), for review | **The Boolean algebra suite (BO10) is the step-7 gate's property half**: the §8.1 properties on every built pair and triple, including coaxial shared-edge collars in both operand orders and the #20408 collars (mandatory), judged by volume, area, the T10 oracle, the contract and run-twice bits | The pin has one commutativity check; properties catch what recipes miss. Against: it will fail widely at first; BO10b fixes the slice's failures before BO12, the rest become issues | 75 §8.1 |
 
 ## 12. What this note did not do
 
